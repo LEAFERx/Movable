@@ -1,0 +1,20 @@
+[package]
+name = "movable"
+version = "0.0.0"
+authors = ["LEAFERx <leaferx@outlook.com>"]
+license = "Apache-2.0"
+publish = false
+edition = "2018"
+
+[dependencies]
+vm = { path = "../official-libra/language/vm" }
+vm-runtime = { path = "../official-libra/language/vm/vm-runtime" }
+vm-cache-map = { path = "../official-libra/language/vm/vm-runtime/vm-cache-map" }
+bytecode-verifier = { path = "../official-libra/language/bytecode-verifier" }
+libra-types = { path = "../official-libra/types" }
+
+structopt = "0.3"
+serde = "1.0"
+serde_json = "1.0"
+z3 = "0.4"
+nix = "0.15.0"

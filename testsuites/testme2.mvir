@@ -1,0 +1,14 @@
+module Test {
+  public testme(x: u64, y: u64) : bool{
+    let z: u64;
+    z = 2 * copy(y);
+    
+    if (move(z) > copy(x)) {
+      if (move(x) > move(y) + 10) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+}
