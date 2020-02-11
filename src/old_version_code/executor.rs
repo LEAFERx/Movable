@@ -1,4 +1,4 @@
-use crate::runtime::{execution_stack::ExecutionStack, value::Value};
+use crate::runtime::{execution_stack::ExecutionStack, value::SymValue};
 
 use libra_types::vm_error::{StatusCode, VMStatus};
 use nix::unistd::{fork, ForkResult};
@@ -8,7 +8,7 @@ use vm::{
   file_format::{Bytecode, CodeOffset, SignatureToken},
 };
 use vm_runtime::{
-  code_cache::module_cache::ModuleCache,
+  code_cache::module_cache::VMModuleCache,
   loaded_data::function::{
     FunctionRef,
     FunctionReference,
@@ -16,22 +16,16 @@ use vm_runtime::{
 };
 use z3::{ast, Context, Model, SatResult, Solver};
 
-pub struct Executor<'ctx, P>
-where
-  P: ModuleCache<'ctx>
-{
+pub struct Executor<'ctx> {
   context: &'ctx Context,
   solver: Solver<'ctx>,
-  execution_stack: ExecutionStack<'ctx, P>,
+  execution_stack: ExecutionStack<'ctx>,
 }
 
-impl<'ctx, P> Executor<'ctx, P>
-where
-  P: ModuleCache<'ctx>
-{
+impl<'ctx> Executor<'ctx> {
   pub fn new(
     context: &'ctx Context,
-    module_cache: P,
+    module_cache: VMModuleCache<'ctx>,
   ) -> Self {
     Executor {
       context,
@@ -40,15 +34,15 @@ where
     }
   }
   
-  pub fn module_cache(&self) -> &P {
+  pub fn module_cache(&self) -> &VMModuleCache<'ctx> {
       &self.execution_stack.module_cache
   }
 
   fn binop<F, T>(&mut self, f: F) -> VMResult<()>
   where
     T: ast::Ast<'ctx>,
-    Option<T>: From<Value<'ctx>>,
-    F: FnOnce(T, T) -> Option<Value<'ctx>>,
+    Option<T>: From<SymValue<'ctx>>,
+    F: FnOnce(T, T) -> Option<SymValue<'ctx>>,
   {
     let rhs = self.execution_stack.pop_as::<T>()?;
     let lhs = self.execution_stack.pop_as::<T>()?;
@@ -142,20 +136,20 @@ where
           }
         }
         Bytecode::Branch(offset) => return Ok(*offset),
-        Bytecode::LdConst(int_const) => {
+        Bytecode::LdU64(int_const) => {
           self
             .execution_stack
-            .push(Value::from_u64(self.context, *int_const))?;
+            .push(SymValue::from_u64(self.context, *int_const))?;
         }
         Bytecode::LdTrue => {
           self
             .execution_stack
-            .push(Value::from_bool(self.context, true))?;
+            .push(SymValue::from_bool(self.context, true))?;
         }
         Bytecode::LdFalse => {
           self
             .execution_stack
-            .push(Value::from_bool(self.context, false))?;
+            .push(SymValue::from_bool(self.context, false))?;
         }
         Bytecode::CopyLoc(idx) => {
           let value = self.execution_stack.top_frame()?.copy_loc(*idx)?;
@@ -240,15 +234,15 @@ where
   pub fn execute_function(
     &mut self,
     function: FunctionRef<'ctx>,
-  ) -> VMResult<(u32, Model<'ctx>, Vec<Value<'ctx>>)> {
+  ) -> VMResult<(u32, Model<'ctx>, Vec<SymValue<'ctx>>)> {
     let mut total_symbols = 0;
     let return_count = function.return_count();
 
     for arg_types in function.signature().arg_types.iter() {
       total_symbols += 1;
       if let Some(v) = match arg_types {
-        SignatureToken::U64 => Some(Value::new_u64(self.context, "symbol_int")),
-        SignatureToken::Bool => Some(Value::new_bool(self.context, "symbol_bool")),
+        SignatureToken::U64 => Some(SymValue::new_u64(self.context, "symbol_int")),
+        SignatureToken::Bool => Some(SymValue::new_bool(self.context, "symbol_bool")),
         _ => None,
       } {
         self.execution_stack.push(v)?;

@@ -1,4 +1,4 @@
-use super::value::{Locals, Value};
+use super::value::{SymLocals, SymValue};
 use std::fmt;
 use vm::{
   errors::{Location, VMResult},
@@ -14,14 +14,14 @@ use vm_runtime::loaded_data::{
 
 pub struct Frame<'ctx> {
   pc: u16,
-  locals: Locals<'ctx>,
+  locals: SymLocals<'ctx>,
   function: FunctionRef<'ctx>,
 }
 
 impl<'ctx> Frame<'ctx> {
   pub fn new(
     function: FunctionRef<'ctx>,
-    locals: Locals<'ctx>,
+    locals: SymLocals<'ctx>,
   ) -> Self {
     Frame {
       pc: 0,
@@ -46,15 +46,15 @@ impl<'ctx> Frame<'ctx> {
     self.function.module()
   }
 
-  pub fn copy_loc(&self, idx: LocalIndex) -> VMResult<Value<'ctx>> {
+  pub fn copy_loc(&self, idx: LocalIndex) -> VMResult<SymValue<'ctx>> {
     self.locals.copy_loc(idx as usize)
   }
 
-  pub fn move_loc(&mut self, idx: LocalIndex) -> VMResult<Value<'ctx>> {
+  pub fn move_loc(&mut self, idx: LocalIndex) -> VMResult<SymValue<'ctx>> {
     self.locals.move_loc(idx as usize)
   }
 
-  pub fn store_loc(&mut self, idx: LocalIndex, value: Value<'ctx>) -> VMResult<()> {
+  pub fn store_loc(&mut self, idx: LocalIndex, value: SymValue<'ctx>) -> VMResult<()> {
     self.locals.store_loc(idx as usize, value)
   }
 }

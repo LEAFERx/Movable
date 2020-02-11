@@ -7,12 +7,15 @@ publish = false
 edition = "2018"
 
 [dependencies]
-vm = { path = "../official-libra/language/vm" }
-vm-runtime = { path = "../official-libra/language/vm/vm-runtime" }
-vm-cache-map = { path = "../official-libra/language/vm/vm-runtime/vm-cache-map" }
-bytecode-verifier = { path = "../official-libra/language/bytecode-verifier" }
-libra-types = { path = "../official-libra/types" }
+vm = { path = "../libra/language/vm" }
+vm-runtime = { path = "../libra/language/vm/vm-runtime" }
+vm-runtime-types = { path = "../libra/language/vm/vm-runtime/vm-runtime-types" }
+vm-cache-map = { path = "../libra/language/vm/vm-runtime/vm-cache-map" }
+bytecode-verifier = { path = "../libra/language/bytecode-verifier" }
+libra-types = { path = "../libra/types" }
+libra-logger = { path = "../libra/common/logger" }
 
+anyhow = "1.0.26"
 structopt = "0.3"
 serde = "1.0"
 serde_json = "1.0"
