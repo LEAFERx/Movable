@@ -1,12 +1,19 @@
 use libra_types::{
   identifier::IdentStr,
+  transaction::Module,
 };
+use vm::{
+  CompiledModule,
+};
+
 use std::{
+  fs::File,
+  io::BufReader,
   path::{Path, PathBuf},
 };
 use structopt::StructOpt;
 
-use z3::{Config, Context};
+use movable::engine::Engine;
 
 #[derive(Debug, StructOpt)]
 struct Args {
@@ -16,13 +23,23 @@ struct Args {
   pub func: String,
 }
 
+fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> CompiledModule {
+  let bytecode_file = File::open(bytecode_path).expect("Failed to open bytecode file");
+  let bytecode_reader = BufReader::new(bytecode_file);
+  let bytecode_json: Module = serde_json::from_reader(bytecode_reader)
+    .expect("Failed to parse json format. File may be corrupted.");
+  CompiledModule::deserialize(&bytecode_json.code())
+    .expect("Failed to read bytecode. File may be corrupted.")
+}
+
 fn main() {
   let args = Args::from_args();
-  let _path = Path::new(&args.source);
-  let _function_name = IdentStr::new(args.func.as_str()).unwrap();
+  let path = Path::new(&args.source);
+  let function_name = IdentStr::new(args.func.as_str()).unwrap();
 
-  let config = Config::new();
-  let _context = Context::new(&config);
+  let module = read_bytecode(path);
 
-  unimplemented!()
+  let mut engine = Engine::from_genesis();
+  engine.add_module(&module.self_id(), &module);
+  engine.execute_function(&module.self_id(), &function_name);
 }

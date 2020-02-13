@@ -38,9 +38,11 @@ enum SymValueImpl<'ctx> {
   ByteArray(SymByteArray<'ctx>),
 
   Struct(SymStruct<'ctx>),
+  #[allow(dead_code)]
   NativeStruct(()), // !!!
 
   Reference(SymReference<'ctx>),
+  #[allow(dead_code)]
   GlobalRef(()), // !!!
   PromotedReference(SymReference<'ctx>),
 }
@@ -140,7 +142,10 @@ impl<'ctx> SymValueImpl<'ctx> {
       // (SymValueImpl::GlobalRef(gr1), SymValueImpl::GlobalRef(gr2)) => gr1.equals(gr2),
       // (SymValueImpl::GlobalRef(gr), SymValueImpl::Reference(reference)) => gr.equals_ref(reference),
       // (SymValueImpl::Reference(reference), SymValueImpl::GlobalRef(gr)) => gr.equals_ref(reference),
-      _ => Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR)),
+      _ => {
+        let msg = format!("Invalid equality called between {:?} and {:?}", self, v2);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
     }
   }
 }
@@ -155,7 +160,7 @@ impl<'ctx> SymValue<'ctx> {
   }
 
   pub fn new_u8(ctx: &'ctx Context, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U64(ast::BV::fresh_const(ctx, prefix, 8)))
+    SymValue(SymValueImpl::U8(ast::BV::fresh_const(ctx, prefix, 8)))
   }
 
   pub fn from_u64(ctx: &'ctx Context, value: u64) -> Self {
@@ -195,15 +200,15 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::Bool(ast::Bool::new_const(ctx, prefix)))
   }
 
-  pub fn from_bytearray(_ctx: &'ctx Context, _bytearray: ByteArray) -> Self {
+  pub fn from_byte_array(_ctx: &'ctx Context, _bytearray: ByteArray) -> Self {
     unimplemented!()
   }
 
-  pub fn from_sym_bytearray(bytearray: SymByteArray<'ctx>) -> Self {
+  pub fn from_sym_byte_array(bytearray: SymByteArray<'ctx>) -> Self {
     SymValue(SymValueImpl::ByteArray(bytearray))
   }
 
-  pub fn new_bytearray(_ctx: &'ctx Context, _prefix: &str) -> Self {
+  pub fn new_byte_array(_ctx: &'ctx Context, _prefix: &str) -> Self {
     unimplemented!()
   }
 
@@ -225,12 +230,28 @@ impl<'ctx> SymValue<'ctx> {
   {
     std::convert::Into::into(self)
   }
-  pub fn equals(self, v2: &SymValue<'ctx>) -> VMResult<ast::Bool<'ctx>> {
+
+  pub fn equals(&self, v2: &SymValue<'ctx>) -> VMResult<ast::Bool<'ctx>> {
     self.0.equals(&v2.0)
   }
 
-  pub fn not_equals(self, v2: &SymValue<'ctx>) -> VMResult<ast::Bool<'ctx>> {
+  pub fn not_equals(&self, v2: &SymValue<'ctx>) -> VMResult<ast::Bool<'ctx>> {
     self.0.equals(&v2.0).and_then(|res| Ok(res.not()))
+  }
+
+  // Move it to SymValueImpl later
+  pub fn into_ast(self) -> VMResult<ast::Dynamic<'ctx>>
+  {
+    match self.0 {
+      SymValueImpl::U8(u) => Ok(u.into()),
+      SymValueImpl::U64(u) => Ok(u.into()),
+      SymValueImpl::U128(u) => Ok(u.into()),
+      SymValueImpl::Bool(b) => Ok(b.into()),
+      _ => {
+        let msg = format!("Cannot convert {:?} to ast.", self.0);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
+    }
   }
 }
 
@@ -239,8 +260,8 @@ impl<'ctx> From<ast::BV<'ctx>> for SymValue<'ctx> {
   fn from(ast_bv: ast::BV<'ctx>) -> SymValue<'ctx> {
     match ast_bv.get_size() {
       8 => SymValue(SymValueImpl::U8(ast_bv)),
-      64 => SymValue(SymValueImpl::U8(ast_bv)),
-      128 => SymValue(SymValueImpl::U8(ast_bv)),
+      64 => SymValue(SymValueImpl::U64(ast_bv)),
+      128 => SymValue(SymValueImpl::U128(ast_bv)),
       _ => panic!(
         "Trying to implicitly convert a bitvector of size {:?} to SymValue",
         ast_bv.get_size()
@@ -256,22 +277,28 @@ impl<'ctx> From<ast::Bool<'ctx>> for SymValue<'ctx> {
   }
 }
 
-impl<'ctx> From<SymValue<'ctx>> for Option<ast::BV<'ctx>> {
-  fn from(value: SymValue<'ctx>) -> Option<ast::BV<'ctx>> {
+impl<'ctx> From<SymValue<'ctx>> for VMResult<ast::BV<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<ast::BV<'ctx>> {
     match value.0 {
-      SymValueImpl::U8(ast) => Some(ast),
-      SymValueImpl::U64(ast) => Some(ast),
-      SymValueImpl::U128(ast) => Some(ast),
-      _ => None,
+      SymValueImpl::U8(ast) => Ok(ast),
+      SymValueImpl::U64(ast) => Ok(ast),
+      SymValueImpl::U128(ast) => Ok(ast),
+      _ => {
+        let msg = format!("Cannot cast {:?} to ast::BV", value);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
     }
   }
 }
 
-impl<'ctx> From<SymValue<'ctx>> for Option<ast::Bool<'ctx>> {
-  fn from(value: SymValue<'ctx>) -> Option<ast::Bool<'ctx>> {
+impl<'ctx> From<SymValue<'ctx>> for VMResult<ast::Bool<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<ast::Bool<'ctx>> {
     match value.0 {
-      SymValueImpl::Bool(ast) => Some(ast),
-      _ => None,
+      SymValueImpl::Bool(ast) => Ok(ast),
+      _ => {
+        let msg = format!("Cannot cast {:?} to ast::BV", value);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
     }
   }
 }
@@ -405,6 +432,7 @@ impl<'ctx> SymReference<'ctx> {
     SymReference(SymMutVal::new(value))
   }
 
+  #[allow(dead_code)]
   fn new_from_cell(val: SymMutVal<'ctx>) -> Self {
     SymReference(val)
   }

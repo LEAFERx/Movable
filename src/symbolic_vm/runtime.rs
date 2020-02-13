@@ -3,8 +3,7 @@ use libra_types::{
   identifier::IdentStr,
   language_storage::ModuleId
 };
-use serde::Deserialize;
-use std::{fs::File, io::BufReader, path::Path};
+use std::{fs::File, io::BufReader, path::Path, marker::PhantomData};
 use vm::{
   errors::*,
   file_format::{CompiledModule, FunctionHandleIndex, SignatureToken},
@@ -20,8 +19,13 @@ use vm_runtime::{
 };
 use vm_runtime_types::{loaded_data::types::Type, type_context::TypeContext};
 use libra_types::transaction::Module;
+use z3::{
+  Context
+};
 
-use super::interpreter::SymInterpreter;
+use crate::symbolic_vm::{
+  interpreter::SymInterpreter,
+};
 
 fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> VerifiedModule {
   let bytecode_file = File::open(bytecode_path).expect("Failed to open bytecode file");
@@ -34,14 +38,17 @@ fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> VerifiedModule {
     .expect("Failed to verify module. This module may not be verified correctly.")
 }
 
-pub struct SymVMRuntime<'alloc> {
+pub struct SymVMRuntime<'ctx, 'alloc> {
   code_cache: VMModuleCache<'alloc>,
+
+  phatom: PhantomData<&'ctx Context>,
 }
 
-impl<'alloc> SymVMRuntime<'alloc> {
+impl<'ctx, 'alloc> SymVMRuntime<'ctx, 'alloc> {
   pub fn new(allocator: &'alloc Arena<LoadedModule>) -> Self {
     SymVMRuntime {
       code_cache: VMModuleCache::new(allocator),
+      phatom: PhantomData,
     }
   }
 
@@ -86,11 +93,17 @@ impl<'alloc> SymVMRuntime<'alloc> {
 
   pub fn execute_function(
     &self,
-    context: &mut dyn InterpreterContext,
+    ctx: &'ctx Context,
+    interp_context: &mut dyn InterpreterContext,
     module: &ModuleId,
-    function_name: &IdentStr
+    function_name: &IdentStr,
   ) -> VMResult<()> {
-    // SymInterpreter::execute_function()
-    unimplemented!()
+    SymInterpreter::execute_function(
+      ctx,
+      interp_context,
+      self,
+      module,
+      function_name,
+    )
   }
 }
