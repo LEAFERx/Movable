@@ -1,5 +1,10 @@
 use z3::{ast, ast::Ast, Context, Sort};
 
+use crate::{
+  engine::solver::Solver,
+  symbolic_vm::types::primitives::SymBool,
+};
+
 fn symbolic_u8_sort(ctx: &Context) -> Sort {
   Sort::bitvector(ctx, 8)
 }
@@ -11,7 +16,8 @@ pub struct SymByteArray<'ctx> {
 }
 
 impl<'ctx> SymByteArray<'ctx> {
-  pub fn new(ctx: &'ctx Context, prefix: &str) -> Self {
+  pub fn new(solver: &'ctx Solver, prefix: &str) -> Self {
+    let ctx = solver.ctx();
     Self {
       array: ast::Array::fresh_const(ctx, prefix, &Sort::int(ctx), &symbolic_u8_sort(ctx)),
       length: ast::Int::from_u64(ctx, 0),
@@ -22,8 +28,8 @@ impl<'ctx> SymByteArray<'ctx> {
     &self.length
   }
 
-  pub fn equals(&self, other: &Self) -> ast::Bool<'ctx> {
+  pub fn equals(&self, other: &Self) -> SymBool<'ctx> {
     let res = self.array._eq(&other.array);
-    res.and(&[&self.length._eq(&other.length)])
+    SymBool::from_ast(res.and(&[&self.length._eq(&other.length)]))
   }
 }

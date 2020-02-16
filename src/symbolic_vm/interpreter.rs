@@ -23,18 +23,25 @@ use vm_runtime_types::{
   type_context::TypeContext,
 };
 
-use z3::{ast, Context, Solver, SatResult};
+use z3::{SatResult};
 
 use nix::unistd::{fork, ForkResult};
 
 use std::{
+  fmt::Debug,
   marker::PhantomData,
   process::exit,
 };
 
-use crate::symbolic_vm::{
-  runtime::SymVMRuntime,
-  types::value::{SymLocals, SymValue},
+use crate::{
+  engine::solver::Solver,
+  symbolic_vm::{
+    runtime::SymVMRuntime,
+    types::{
+      primitives::{SymBool, SymU8},
+      value::{SymLocals, SymValue, SymIntegerValue},
+    },
+  },
 };
 
 fn derive_type_tag(
@@ -89,7 +96,7 @@ pub struct SymInterpreter<'vtxn> {
 
 impl<'vtxn> SymInterpreter<'vtxn> {
   pub fn execute_function(
-    ctx: &'vtxn Context,
+    solver: &'vtxn Solver,
     interp_context: &mut dyn InterpreterContext,
     runtime: &'vtxn SymVMRuntime<'vtxn, '_>,
     module: &ModuleId,
@@ -104,7 +111,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
       .ok_or_else(|| VMStatus::new(StatusCode::LINKER_ERROR))?;
     let func = FunctionRef::new(loaded_module, *func_idx);
 
-    interp.execute(ctx, runtime, interp_context, func)
+    interp.execute(solver, runtime, interp_context, func)
   }
 
   fn new() -> Self {
@@ -116,16 +123,12 @@ impl<'vtxn> SymInterpreter<'vtxn> {
 
   fn execute(
     &mut self,
-    ctx: &'vtxn Context,
+    solver: &'vtxn Solver,
     runtime: &'vtxn SymVMRuntime<'vtxn, '_>,
     interp_context: &mut dyn InterpreterContext,
     function: FunctionRef<'vtxn>,
     // args: Vec<SymValue<'vtxn>>,
   ) -> VMResult<()> {
-    // Create a temp solver just to see the result
-    // Move it outside
-    let solver = Solver::new(ctx);
-
     // Construct symbolic arguments
     // Should do it outside
     // Also implement other types
@@ -133,10 +136,10 @@ impl<'vtxn> SymInterpreter<'vtxn> {
     let prefix = "TestFuncArgs";
     for sig in function.signature().arg_types.clone() {
       let val = match sig {
-        SignatureToken::Bool => SymValue::new_bool(ctx, prefix),
-        SignatureToken::U8 => SymValue::new_u8(ctx, prefix),
-        SignatureToken::U64 => SymValue::new_u64(ctx, prefix),
-        SignatureToken::U128 => SymValue::new_u128(ctx, prefix),
+        SignatureToken::Bool => SymValue::new_bool(solver, prefix),
+        SignatureToken::U8 => SymValue::new_u8(solver, prefix),
+        SignatureToken::U64 => SymValue::new_u64(solver, prefix),
+        SignatureToken::U128 => SymValue::new_u128(solver, prefix),
         _ => unimplemented!(),
       };
       args.push(val);
@@ -153,7 +156,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
     loop {
       let code = current_frame.code_definition();
       let exit_code = self
-        .execute_code_unit(ctx, runtime, interp_context, &mut current_frame, code)
+        .execute_code_unit(solver, runtime, interp_context, &mut current_frame, code)
         .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
       match exit_code {
         ExitCode::Return => {
@@ -219,9 +222,9 @@ impl<'vtxn> SymInterpreter<'vtxn> {
             Ok(ForkResult::Parent { .. }) => {
               msg += &format!("Fork parent: assume {:?}->{:#?}\n", instr, condition);
               if instr {
-                solver.assert(&condition);
+                solver.assert(&condition.as_inner());
               } else {
-                solver.assert(&condition.not());
+                solver.assert(&condition.not().as_inner());
               }
               if solver.check() == SatResult::Unsat {
                 msg += &format!("Parent not satisfied, exit.\n");
@@ -232,9 +235,9 @@ impl<'vtxn> SymInterpreter<'vtxn> {
             Ok(ForkResult::Child) => {
               msg += &format!("Fork child: assume {:?}->{:#?}\n", !instr, condition);
               if instr {
-                solver.assert(&condition.not());
+                solver.assert(&condition.not().as_inner());
               } else {
-                solver.assert(&condition);
+                solver.assert(&condition.as_inner());
               }
               if solver.check() == SatResult::Unsat {
                 msg += &format!("Child not satisfied, exit.\n");
@@ -265,7 +268,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
 
   fn execute_code_unit(
     &mut self,
-    ctx: &'vtxn Context,
+    solver: &'vtxn Solver,
     _runtime: &'vtxn SymVMRuntime<'vtxn, '_>,
     _interp_context: &mut dyn InterpreterContext,
     frame: &mut Frame<'vtxn, FunctionRef<'vtxn>>,
@@ -285,7 +288,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
             return Ok(ExitCode::Return);
           }
           Bytecode::BrTrue(offset) => {
-            return Ok(ExitCode::Branch(true, self.operand_stack.pop_as::<ast::Bool>()?, *offset));
+            return Ok(ExitCode::Branch(true, self.operand_stack.pop_as::<SymBool>()?, *offset));
             // gas!(const_instr: context, self, Opcodes::BR_TRUE)?;
             // if self.operand_stack.pop_as::<bool>()? {
             //   frame.pc = *offset;
@@ -293,7 +296,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
             // }
           }
           Bytecode::BrFalse(offset) => {
-            return Ok(ExitCode::Branch(false, self.operand_stack.pop_as::<ast::Bool>()?, *offset));
+            return Ok(ExitCode::Branch(false, self.operand_stack.pop_as::<SymBool>()?, *offset));
             // gas!(const_instr: context, self, Opcodes::BR_FALSE)?;
             // if !self.operand_stack.pop_as::<bool>()? {
             //   frame.pc = *offset;
@@ -309,24 +312,24 @@ impl<'vtxn> SymInterpreter<'vtxn> {
             // gas!(const_instr: context, self, Opcodes::LD_U8)?;
             self
               .operand_stack
-              .push(SymValue::from_u8(ctx, *int_const))?;
+              .push(SymValue::from_u8(solver, *int_const))?;
           }
           Bytecode::LdU64(int_const) => {
             // gas!(const_instr: context, self, Opcodes::LD_U64)?;
             self
               .operand_stack
-              .push(SymValue::from_u64(ctx, *int_const))?;
+              .push(SymValue::from_u64(solver, *int_const))?;
           }
           Bytecode::LdU128(int_const) => {
             // gas!(const_instr: context, self, Opcodes::LD_U128)?;
             self
               .operand_stack
-              .push(SymValue::from_u128(ctx, *int_const))?;
+              .push(SymValue::from_u128(solver, *int_const))?;
           }
           Bytecode::LdAddr(idx) => {
             // gas!(const_instr: context, self, Opcodes::LD_ADDR)?;
             self.operand_stack.push(SymValue::from_address(
-              ctx,
+              solver,
               *frame.module().address_at(*idx),
             ))?;
           }
@@ -340,15 +343,15 @@ impl<'vtxn> SymInterpreter<'vtxn> {
             // )?;
             self
               .operand_stack
-              .push(SymValue::from_byte_array(ctx, byte_array.clone()))?;
+              .push(SymValue::from_byte_array(solver, byte_array.clone()))?;
           }
           Bytecode::LdTrue => {
             // gas!(const_instr: context, self, Opcodes::LD_TRUE)?;
-            self.operand_stack.push(SymValue::from_bool(ctx, true))?;
+            self.operand_stack.push(SymValue::from_bool(solver, true))?;
           }
           Bytecode::LdFalse => {
             // gas!(const_instr: context, self, Opcodes::LD_TRUE)?;
-            self.operand_stack.push(SymValue::from_bool(ctx, false))?;
+            self.operand_stack.push(SymValue::from_bool(solver, false))?;
           }
           Bytecode::CopyLoc(idx) => {
             let local = frame.copy_loc(*idx)?;
@@ -447,75 +450,75 @@ impl<'vtxn> SymInterpreter<'vtxn> {
           // Arithmetic Operations
           Bytecode::Add => {
             // gas!(const_instr: context, self, Opcodes::ADD)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvadd(&r).into()))?
+            self.binop_int(SymIntegerValue::add)?
           }
           Bytecode::Sub => {
             // gas!(const_instr: context, self, Opcodes::SUB)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvsub(&r).into()))?
+            self.binop_int(SymIntegerValue::sub)?
           }
           Bytecode::Mul => {
             // gas!(const_instr: context, self, Opcodes::MUL)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvmul(&r).into()))?
+            self.binop_int(SymIntegerValue::mul)?
           }
           Bytecode::Mod => {
             // gas!(const_instr: context, self, Opcodes::MOD)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvsmod(&r).into()))?
+            self.binop_int(SymIntegerValue::rem)?
           }
           Bytecode::Div => {
             // gas!(const_instr: context, self, Opcodes::DIV)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvudiv(&r).into()))?
+            self.binop_int(SymIntegerValue::div)?
           }
           Bytecode::BitOr => {
             // gas!(const_instr: context, self, Opcodes::BIT_OR)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvor(&r).into()))?
+            self.binop_int(SymIntegerValue::bit_or)?
           }
           Bytecode::BitAnd => {
             // gas!(const_instr: context, self, Opcodes::BIT_AND)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvand(&r).into()))?
+            self.binop_int(SymIntegerValue::bit_and)?
           }
           Bytecode::Xor => {
             // gas!(const_instr: context, self, Opcodes::XOR)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvxor(&r).into()))?
+            self.binop_int(SymIntegerValue::bit_xor)?
           }
-          // Bytecode::Shl => {
-          //   // gas!(const_instr: context, self, Opcodes::SHL)?;
-          //   let rhs = self.operand_stack.pop_as::<u8>()?;
-          //   let lhs = self.operand_stack.pop_as::<IntegerValue>()?;
-          //   self
-          //     .operand_stack
-          //     .push(lhs.shl_checked(rhs)?.into_value())?;
-          // }
-          // Bytecode::Shr => {
-          //   // gas!(const_instr: context, self, Opcodes::SHR)?;
-          //   let rhs = self.operand_stack.pop_as::<u8>()?;
-          //   let lhs = self.operand_stack.pop_as::<IntegerValue>()?;
-          //   self
-          //     .operand_stack
-          //     .push(lhs.shr_checked(rhs)?.into_value())?;
-          // }
+          Bytecode::Shl => {
+            // gas!(const_instr: context, self, Opcodes::SHL)?;
+            let rhs = self.operand_stack.pop_as::<SymU8>()?;
+            let lhs = self.operand_stack.pop_as::<SymIntegerValue>()?;
+            self
+              .operand_stack
+              .push(lhs.shl(rhs)?.into_value())?;
+          }
+          Bytecode::Shr => {
+            // gas!(const_instr: context, self, Opcodes::SHR)?;
+            let rhs = self.operand_stack.pop_as::<SymU8>()?;
+            let lhs = self.operand_stack.pop_as::<SymIntegerValue>()?;
+            self
+              .operand_stack
+              .push(lhs.shr(rhs)?.into_value())?;
+          }
           Bytecode::Or => {
             // gas!(const_instr: context, self, Opcodes::OR)?;
-            self.binop(|l: ast::Bool<'vtxn>, r| Ok(l.or(&[&r]).into()))?
+            self.binop_bool(|l: SymBool<'vtxn>, r| Ok(l.or(&r)))?
           }
           Bytecode::And => {
             // gas!(const_instr: context, self, Opcodes::AND)?;
-            self.binop(|l: ast::Bool<'vtxn>, r| Ok(l.and(&[&r]).into()))?
+            self.binop_bool(|l: SymBool<'vtxn>, r| Ok(l.and(&r)))?
           }
           Bytecode::Lt => {
             // gas!(const_instr: context, self, Opcodes::LT)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvult(&r).into()))?
+            self.binop_bool(SymIntegerValue::lt)?
           }
           Bytecode::Gt => {
             // gas!(const_instr: context, self, Opcodes::GT)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvugt(&r).into()))?
+            self.binop_bool(SymIntegerValue::le)?
           }
           Bytecode::Le => {
             // gas!(const_instr: context, self, Opcodes::LE)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvule(&r).into()))?
+            self.binop_bool(SymIntegerValue::gt)?
           }
           Bytecode::Ge => {
             // gas!(const_instr: context, self, Opcodes::GE)?;
-            self.binop(|l: ast::BV<'vtxn>, r| Ok(l.bvuge(&r).into()))?
+            self.binop_bool(SymIntegerValue::ge)?
           }
           // Bytecode::Abort => {
           //   // gas!(const_instr: context, self, Opcodes::ABORT)?;
@@ -531,7 +534,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
             //   Opcodes::EQ,
             //   lhs.size().add(rhs.size())
             // )?;
-            self.operand_stack.push(lhs.equals(&rhs)?.into())?;
+            self.operand_stack.push(SymValue::from_sym_bool(lhs.equals(&rhs)?))?;
           }
           Bytecode::Neq => {
             let lhs = self.operand_stack.pop()?;
@@ -542,7 +545,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
             //   Opcodes::NEQ,
             //   lhs.size().add(rhs.size())
             // )?;
-            self.operand_stack.push(lhs.not_equals(&rhs)?.into())?;
+            self.operand_stack.push(SymValue::from_sym_bool(lhs.not_equals(&rhs)?))?;
           }
           // Bytecode::GetTxnSenderAddress => {
           //   // gas!(const_instr: context, self, Opcodes::GET_TXN_SENDER)?;
@@ -611,8 +614,8 @@ impl<'vtxn> SymInterpreter<'vtxn> {
           // }
           Bytecode::Not => {
             // gas!(const_instr: context, self, Opcodes::NOT)?;
-            let value = self.operand_stack.pop_as::<ast::Bool>()?.not();
-            self.operand_stack.push(value.into())?;
+            let value = self.operand_stack.pop_as::<SymBool>()?.not();
+            self.operand_stack.push(SymValue::from_sym_bool(value))?;
           }
           Bytecode::GetGasRemaining
           | Bytecode::GetTxnPublicKey
@@ -677,13 +680,39 @@ impl<'vtxn> SymInterpreter<'vtxn> {
 
   fn binop<F, T>(&mut self, f: F) -> VMResult<()>
   where
+    T: Debug,
     VMResult<T>: From<SymValue<'vtxn>>,
     F: FnOnce(T, T) -> VMResult<SymValue<'vtxn>>,
   {
     let rhs = self.operand_stack.pop_as::<T>()?;
     let lhs = self.operand_stack.pop_as::<T>()?;
+    println!("{:?} {:?}", rhs, lhs);
     let result = f(lhs, rhs)?;
     self.operand_stack.push(result)
+  }
+
+  /// Perform a binary operation for integer values.
+  fn binop_int<F>(&mut self, f: F) -> VMResult<()>
+  where
+    F: FnOnce(SymIntegerValue<'vtxn>, SymIntegerValue<'vtxn>) -> VMResult<SymIntegerValue<'vtxn>>,
+  {
+    self.binop(|lhs, rhs| {
+      Ok(match f(lhs, rhs)? {
+        SymIntegerValue::U8(x) => SymValue::from_sym_u8(x),
+        SymIntegerValue::U64(x) => SymValue::from_sym_u64(x),
+        SymIntegerValue::U128(x) => SymValue::from_sym_u128(x),
+      })
+    })
+  }
+
+  /// Perform a binary operation for boolean values.
+  fn binop_bool<F, T>(&mut self, f: F) -> VMResult<()>
+  where
+    T: Debug,
+    VMResult<T>: From<SymValue<'vtxn>>,
+    F: FnOnce(T, T) -> VMResult<SymBool<'vtxn>>,
+  {
+    self.binop(|lhs, rhs| Ok(SymValue::from_sym_bool(f(lhs, rhs)?)))
   }
 
   //
@@ -869,7 +898,7 @@ enum ExitCode<'vtxn> {
   Call(FunctionHandleIndex, LocalsSignatureIndex),
   /// A `BrTrue / BrFalse` opcode was found.
   /// BrTrue / BrFalse, condition , offset
-  Branch(bool, ast::Bool<'vtxn>, CodeOffset),
+  Branch(bool, SymBool<'vtxn>, CodeOffset),
 }
 
 impl<'vtxn, F> Frame<'vtxn, F>

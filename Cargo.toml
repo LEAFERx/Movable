@@ -18,6 +18,8 @@ libra-logger = { path = "../libra/common/logger" }
 libra-state-view = { path = "../libra/storage/state-view" }
 
 anyhow = "1.0.26"
+log = "0.4"
+env_logger = "0.7"
 structopt = "0.3"
 serde = "1.0"
 serde_json = "1.0"

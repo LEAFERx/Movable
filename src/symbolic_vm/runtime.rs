@@ -19,12 +19,12 @@ use vm_runtime::{
 };
 use vm_runtime_types::{loaded_data::types::Type, type_context::TypeContext};
 use libra_types::transaction::Module;
-use z3::{
-  Context
-};
 
-use crate::symbolic_vm::{
-  interpreter::SymInterpreter,
+use crate::{
+  engine::solver::Solver,
+  symbolic_vm::{
+    interpreter::SymInterpreter,
+  },
 };
 
 fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> VerifiedModule {
@@ -41,7 +41,7 @@ fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> VerifiedModule {
 pub struct SymVMRuntime<'ctx, 'alloc> {
   code_cache: VMModuleCache<'alloc>,
 
-  phatom: PhantomData<&'ctx Context>,
+  phatom: PhantomData<&'ctx Solver<'ctx>>,
 }
 
 impl<'ctx, 'alloc> SymVMRuntime<'ctx, 'alloc> {
@@ -93,13 +93,13 @@ impl<'ctx, 'alloc> SymVMRuntime<'ctx, 'alloc> {
 
   pub fn execute_function(
     &self,
-    ctx: &'ctx Context,
+    solver: &'ctx Solver,
     interp_context: &mut dyn InterpreterContext,
     module: &ModuleId,
     function_name: &IdentStr,
   ) -> VMResult<()> {
     SymInterpreter::execute_function(
-      ctx,
+      solver,
       interp_context,
       self,
       module,

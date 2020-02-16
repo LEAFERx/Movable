@@ -33,6 +33,8 @@ fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> CompiledModule {
 }
 
 fn main() {
+  env_logger::init();
+
   let args = Args::from_args();
   let path = Path::new(&args.source);
   let function_name = IdentStr::new(args.func.as_str()).unwrap();

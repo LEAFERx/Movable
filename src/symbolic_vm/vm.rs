@@ -6,11 +6,10 @@ use vm_runtime::{
   loaded_data::loaded_module::LoadedModule,
 };
 
-use z3::{
-  Context,
+use crate::{
+  engine::solver::Solver,
+  symbolic_vm::runtime::SymVMRuntime,
 };
-
-use crate::symbolic_vm::runtime::SymVMRuntime;
 use symbolic_vm_definition::SymbolicVMImpl;
 
 rental! {
@@ -26,14 +25,14 @@ rental! {
 }
 
 pub struct SymbolicVM<'ctx> {
-  ctx: &'ctx Context,
+  solver: &'ctx Solver<'ctx>,
   vm: SymbolicVMImpl<'ctx>,
 }
 
 impl<'ctx> SymbolicVM<'ctx> {
-  pub fn new(ctx: &'ctx Context) -> Self {
+  pub fn new(solver: &'ctx Solver<'ctx>) -> Self {
     SymbolicVM {
-      ctx,
+      solver,
       vm: SymbolicVMImpl::new(Box::new(Arena::new()), |arena| {
         SymVMRuntime::new(&*arena)
       }),
@@ -50,7 +49,7 @@ impl<'ctx> SymbolicVM<'ctx> {
   ) -> VMResult<()> {
     self.vm.rent(|runtime| {
       runtime.execute_function(
-        self.ctx,
+        self.solver,
         chain_state,
         module,
         function_name,

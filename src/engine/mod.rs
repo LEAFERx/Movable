@@ -32,6 +32,9 @@ use crate::symbolic_vm::{
   vm::SymbolicVM,
 };
 
+pub mod solver;
+use solver::Solver;
+
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 struct ModuleList {
   address: [u8; ADDRESS_LENGTH],
@@ -63,7 +66,8 @@ impl Engine {
   pub fn execute_function(&self, module: &ModuleId, function_name: &IdentStr) {
     let config = Config::new();
     let context = Context::new(&config);
-    let vm = SymbolicVM::new(&context);
+    let solver = Solver::new(&context);
+    let vm = SymbolicVM::new(&solver);
     let data_cache = BlockDataCache::new(&self.data_store);
     let mut interp_context = TransactionExecutionContext::new(GasUnits::new(0), &data_cache);
     vm.execute_function(module, function_name, &mut interp_context).expect("VM should run correctly");

@@ -11,9 +11,16 @@ use std::{
   rc::Rc,
 };
 use vm::{errors::*, IndexKind};
-use z3::{ast, ast::Ast, Context};
+use z3::ast::Dynamic;
 
-use crate::symbolic_vm::types::{account_address::SymAccountAddress, byte_array::SymByteArray};
+use crate::{
+  engine::solver::Solver,
+  symbolic_vm::types::{
+    account_address::SymAccountAddress,
+    byte_array::SymByteArray,
+    primitives::{SymBool, SymU128, SymU64, SymU8},
+  },
+};
 
 // address is [u8; 32] now
 // libra/types/src/account_address.rs
@@ -28,13 +35,13 @@ use crate::symbolic_vm::types::{account_address::SymAccountAddress, byte_array::
 #[derive(Debug, Clone)]
 enum SymValueImpl<'ctx> {
   Invalid,
-  U8(ast::BV<'ctx>),
-  U64(ast::BV<'ctx>),
-  U128(ast::BV<'ctx>),
+  U8(SymU8<'ctx>),
+  U64(SymU64<'ctx>),
+  U128(SymU128<'ctx>),
   // We do not symbolify account address
   // This is only a wrapper to preserve a ref tp Z3 context
   Address(SymAccountAddress<'ctx>),
-  Bool(ast::Bool<'ctx>),
+  Bool(SymBool<'ctx>),
   ByteArray(SymByteArray<'ctx>),
 
   Struct(SymStruct<'ctx>),
@@ -55,7 +62,7 @@ pub struct SymMutVal<'ctx>(Rc<RefCell<SymValueImpl<'ctx>>>);
 
 #[derive(Debug, Clone)]
 pub struct SymStruct<'ctx> {
-  ctx: &'ctx Context,
+  solver: &'ctx Solver<'ctx>,
   fields: Vec<SymMutVal<'ctx>>,
 }
 
@@ -92,7 +99,27 @@ pub enum SymReferenceValue<'ctx> {
 //   reference: MutVal,
 // }
 
+#[derive(Debug)]
+pub enum SymIntegerValue<'ctx> {
+  U8(SymU8<'ctx>),
+  U64(SymU64<'ctx>),
+  U128(SymU128<'ctx>),
+}
+
 impl<'ctx> SymValueImpl<'ctx> {
+  pub fn into_ast(self) -> VMResult<Dynamic<'ctx>> {
+    match self {
+      SymValueImpl::U8(u) => Ok(u.collect()),
+      SymValueImpl::U64(u) => Ok(u.collect()),
+      SymValueImpl::U128(u) => Ok(u.collect()),
+      SymValueImpl::Bool(b) => Ok(b.collect()),
+      _ => {
+        let msg = format!("Cannot convert {:?} to ast.", self);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
+    }
+  }
+
   fn into_value(self) -> VMResult<SymValue<'ctx>> {
     match self {
       SymValueImpl::Invalid => {
@@ -127,13 +154,13 @@ impl<'ctx> SymValueImpl<'ctx> {
     }
   }
 
-  fn equals(&self, v2: &SymValueImpl<'ctx>) -> VMResult<ast::Bool<'ctx>> {
+  fn equals(&self, v2: &SymValueImpl<'ctx>) -> VMResult<SymBool<'ctx>> {
     match (self, v2) {
       // values
-      (SymValueImpl::U8(u1), SymValueImpl::U8(u2)) => Ok(u1._eq(u2)),
-      (SymValueImpl::U64(u1), SymValueImpl::U64(u2)) => Ok(u1._eq(u2)),
-      (SymValueImpl::U128(u1), SymValueImpl::U128(u2)) => Ok(u1._eq(u2)),
-      (SymValueImpl::Bool(b1), SymValueImpl::Bool(b2)) => Ok(b1._eq(b2)),
+      (SymValueImpl::U8(u1), SymValueImpl::U8(u2)) => Ok(u1.equals(u2)),
+      (SymValueImpl::U64(u1), SymValueImpl::U64(u2)) => Ok(u1.equals(u2)),
+      (SymValueImpl::U128(u1), SymValueImpl::U128(u2)) => Ok(u1.equals(u2)),
+      (SymValueImpl::Bool(b1), SymValueImpl::Bool(b2)) => Ok(b1.equals(b2)),
       (SymValueImpl::Address(a1), SymValueImpl::Address(a2)) => a1.equals(a2),
       (SymValueImpl::ByteArray(ba1), SymValueImpl::ByteArray(ba2)) => Ok(ba1.equals(&ba2)),
       (SymValueImpl::Struct(s1), SymValueImpl::Struct(s2)) => s1.equals(s2),
@@ -155,52 +182,65 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(value)
   }
 
-  pub fn from_u8(ctx: &'ctx Context, value: u8) -> Self {
-    SymValue(SymValueImpl::U8(ast::BV::from_u64(ctx, value as u64, 8)))
+  pub fn from_u8(solver: &'ctx Solver, value: u8) -> Self {
+    SymValue(SymValueImpl::U8(SymU8::from(solver, value)))
   }
 
-  pub fn new_u8(ctx: &'ctx Context, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U8(ast::BV::fresh_const(ctx, prefix, 8)))
+  pub fn from_sym_u8(sym: SymU8<'ctx>) -> Self {
+    SymValue(SymValueImpl::U8(sym))
   }
 
-  pub fn from_u64(ctx: &'ctx Context, value: u64) -> Self {
-    SymValue(SymValueImpl::U64(ast::BV::from_u64(ctx, value, 64)))
+  pub fn new_u8(solver: &'ctx Solver, prefix: &str) -> Self {
+    SymValue(SymValueImpl::U8(SymU8::new(solver, prefix)))
   }
 
-  pub fn new_u64(ctx: &'ctx Context, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U64(ast::BV::fresh_const(ctx, prefix, 64)))
+  pub fn from_u64(solver: &'ctx Solver, value: u64) -> Self {
+    SymValue(SymValueImpl::U64(SymU64::from(solver, value)))
   }
 
-  pub fn from_u128(ctx: &'ctx Context, value: u128) -> Self {
-    let x = ast::BV::from_u64(ctx, (value >> 64) as u64, 64).concat(&ast::BV::from_u64(
-      ctx,
-      value as u64,
-      64,
-    ));
-    SymValue(SymValueImpl::U128(x))
+  pub fn from_sym_u64(sym: SymU64<'ctx>) -> Self {
+    SymValue(SymValueImpl::U64(sym))
   }
 
-  pub fn new_u128(ctx: &'ctx Context, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U128(ast::BV::fresh_const(ctx, prefix, 128)))
+  pub fn new_u64(solver: &'ctx Solver, prefix: &str) -> Self {
+    SymValue(SymValueImpl::U64(SymU64::new(solver, prefix)))
   }
 
-  pub fn from_address(ctx: &'ctx Context, address: AccountAddress) -> Self {
-    SymValue(SymValueImpl::Address(SymAccountAddress::new(ctx, address)))
+  pub fn from_u128(solver: &'ctx Solver, value: u128) -> Self {
+    SymValue(SymValueImpl::U128(SymU128::from(solver, value)))
+  }
+
+  pub fn from_sym_u128(sym: SymU128<'ctx>) -> Self {
+    SymValue(SymValueImpl::U128(sym))
+  }
+
+  pub fn new_u128(solver: &'ctx Solver, prefix: &str) -> Self {
+    SymValue(SymValueImpl::U128(SymU128::new(solver, prefix)))
+  }
+
+  pub fn from_address(solver: &'ctx Solver, address: AccountAddress) -> Self {
+    SymValue(SymValueImpl::Address(SymAccountAddress::new(
+      solver, address,
+    )))
   }
 
   pub fn from_sym_address(address: SymAccountAddress<'ctx>) -> Self {
     SymValue(SymValueImpl::Address(address))
   }
 
-  pub fn from_bool(ctx: &'ctx Context, value: bool) -> Self {
-    SymValue(SymValueImpl::Bool(ast::Bool::from_bool(ctx, value)))
+  pub fn from_bool(solver: &'ctx Solver, value: bool) -> Self {
+    SymValue(SymValueImpl::Bool(SymBool::from(solver, value)))
   }
 
-  pub fn new_bool(ctx: &'ctx Context, prefix: &str) -> Self {
-    SymValue(SymValueImpl::Bool(ast::Bool::new_const(ctx, prefix)))
+  pub fn from_sym_bool(sym: SymBool<'ctx>) -> Self {
+    SymValue(SymValueImpl::Bool(sym))
   }
 
-  pub fn from_byte_array(_ctx: &'ctx Context, _bytearray: ByteArray) -> Self {
+  pub fn new_bool(solver: &'ctx Solver, prefix: &str) -> Self {
+    SymValue(SymValueImpl::Bool(SymBool::new(solver, prefix)))
+  }
+
+  pub fn from_byte_array(_solver: &'ctx Solver, _bytearray: ByteArray) -> Self {
     unimplemented!()
   }
 
@@ -208,7 +248,7 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::ByteArray(bytearray))
   }
 
-  pub fn new_byte_array(_ctx: &'ctx Context, _prefix: &str) -> Self {
+  pub fn new_byte_array(_solver: &'ctx Solver, _prefix: &str) -> Self {
     unimplemented!()
   }
 
@@ -231,72 +271,267 @@ impl<'ctx> SymValue<'ctx> {
     std::convert::Into::into(self)
   }
 
-  pub fn equals(&self, v2: &SymValue<'ctx>) -> VMResult<ast::Bool<'ctx>> {
+  pub fn equals(&self, v2: &SymValue<'ctx>) -> VMResult<SymBool<'ctx>> {
     self.0.equals(&v2.0)
   }
 
-  pub fn not_equals(&self, v2: &SymValue<'ctx>) -> VMResult<ast::Bool<'ctx>> {
+  pub fn not_equals(&self, v2: &SymValue<'ctx>) -> VMResult<SymBool<'ctx>> {
     self.0.equals(&v2.0).and_then(|res| Ok(res.not()))
   }
 
   // Move it to SymValueImpl later
-  pub fn into_ast(self) -> VMResult<ast::Dynamic<'ctx>>
-  {
-    match self.0 {
-      SymValueImpl::U8(u) => Ok(u.into()),
-      SymValueImpl::U64(u) => Ok(u.into()),
-      SymValueImpl::U128(u) => Ok(u.into()),
-      SymValueImpl::Bool(b) => Ok(b.into()),
+  pub fn into_ast(self) -> VMResult<Dynamic<'ctx>> {
+    self.0.into_ast()
+  }
+}
+
+impl<'ctx> SymIntegerValue<'ctx> {
+  pub fn add(self, other: Self) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    let res = match (&self, &other) {
+      (U8(l), U8(r)) => Some(SymIntegerValue::U8(SymU8::add(l, r))),
+      (U64(l), U64(r)) => Some(SymIntegerValue::U64(SymU64::add(l, r))),
+      (U128(l), U128(r)) => Some(SymIntegerValue::U128(SymU128::add(l, r))),
+      (l, r) => {
+        let msg = format!("Cannot add {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    };
+    res.ok_or_else(|| VMStatus::new(StatusCode::ARITHMETIC_ERROR))
+  }
+
+  pub fn sub(self, other: Self) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    let res = match (&self, &other) {
+      (U8(l), U8(r)) => Some(SymIntegerValue::U8(SymU8::sub(l, r))),
+      (U64(l), U64(r)) => Some(SymIntegerValue::U64(SymU64::sub(l, r))),
+      (U128(l), U128(r)) => Some(SymIntegerValue::U128(SymU128::sub(l, r))),
+      (l, r) => {
+        let msg = format!("Cannot sub {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    };
+    res.ok_or_else(|| VMStatus::new(StatusCode::ARITHMETIC_ERROR))
+  }
+
+  pub fn mul(self, other: Self) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    let res = match (&self, &other) {
+      (U8(l), U8(r)) => Some(SymIntegerValue::U8(SymU8::mul(l, r))),
+      (U64(l), U64(r)) => Some(SymIntegerValue::U64(SymU64::mul(l, r))),
+      (U128(l), U128(r)) => Some(SymIntegerValue::U128(SymU128::mul(l, r))),
+      (l, r) => {
+        let msg = format!("Cannot mul {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    };
+    res.ok_or_else(|| VMStatus::new(StatusCode::ARITHMETIC_ERROR))
+  }
+
+  pub fn div(self, other: Self) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    let res = match (&self, &other) {
+      (U8(l), U8(r)) => Some(SymIntegerValue::U8(SymU8::div(l, r))),
+      (U64(l), U64(r)) => Some(SymIntegerValue::U64(SymU64::div(l, r))),
+      (U128(l), U128(r)) => Some(SymIntegerValue::U128(SymU128::div(l, r))),
+      (l, r) => {
+        let msg = format!("Cannot div {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    };
+    res.ok_or_else(|| VMStatus::new(StatusCode::ARITHMETIC_ERROR))
+  }
+
+  pub fn rem(self, other: Self) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    let res = match (&self, &other) {
+      (U8(l), U8(r)) => Some(SymIntegerValue::U8(SymU8::rem(l, r))),
+      (U64(l), U64(r)) => Some(SymIntegerValue::U64(SymU64::rem(l, r))),
+      (U128(l), U128(r)) => Some(SymIntegerValue::U128(SymU128::rem(l, r))),
+      (l, r) => {
+        let msg = format!("Cannot rem {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    };
+    res.ok_or_else(|| VMStatus::new(StatusCode::ARITHMETIC_ERROR))
+  }
+
+  pub fn bit_or(self, other: Self) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    Ok(match (&self, &other) {
+      (U8(l), U8(r)) => SymIntegerValue::U8(SymU8::bit_or(l, r)),
+      (U64(l), U64(r)) => SymIntegerValue::U64(SymU64::bit_or(l, r)),
+      (U128(l), U128(r)) => SymIntegerValue::U128(SymU128::bit_or(l, r)),
+      (l, r) => {
+        let msg = format!("Cannot bit_or {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    })
+  }
+
+  pub fn bit_and(self, other: Self) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    Ok(match (&self, &other) {
+      (U8(l), U8(r)) => SymIntegerValue::U8(SymU8::bit_and(l, r)),
+      (U64(l), U64(r)) => SymIntegerValue::U64(SymU64::bit_and(l, r)),
+      (U128(l), U128(r)) => SymIntegerValue::U128(SymU128::bit_and(l, r)),
+      (l, r) => {
+        let msg = format!("Cannot bit_and {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    })
+  }
+
+  pub fn bit_xor(self, other: Self) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    Ok(match (&self, &other) {
+      (U8(l), U8(r)) => SymIntegerValue::U8(SymU8::bit_xor(l, r)),
+      (U64(l), U64(r)) => SymIntegerValue::U64(SymU64::bit_xor(l, r)),
+      (U128(l), U128(r)) => SymIntegerValue::U128(SymU128::bit_xor(l, r)),
+      (l, r) => {
+        let msg = format!("Cannot bit_xor {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    })
+  }
+
+  pub fn shl(self, n_bits: SymU8<'ctx>) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    Ok(match self {
+      U8(x) => SymIntegerValue::U8(x.shl(&n_bits)),
+      U64(x) => SymIntegerValue::U64(x.shl(&n_bits)),
+      U128(x) => SymIntegerValue::U128(x.shl(&n_bits)),
+    })
+  }
+
+  pub fn shr(self, n_bits: SymU8<'ctx>) -> VMResult<Self> {
+    use SymIntegerValue::*;
+    Ok(match self {
+      U8(x) => SymIntegerValue::U8(x.shr(&n_bits)),
+      U64(x) => SymIntegerValue::U64(x.shr(&n_bits)),
+      U128(x) => SymIntegerValue::U128(x.shr(&n_bits)),
+    })
+  }
+
+  pub fn lt(self, other: Self) -> VMResult<SymBool<'ctx>> {
+    use SymIntegerValue::*;
+    Ok(match (&self, &other) {
+      (U8(l), U8(r)) => SymU8::lt(l, r),
+      (U64(l), U64(r)) => SymU64::lt(l, r),
+      (U128(l), U128(r)) => SymU128::lt(l, r),
+      (l, r) => {
+        let msg = format!("Cannot lt {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    })
+  }
+
+  pub fn le(self, other: Self) -> VMResult<SymBool<'ctx>> {
+    use SymIntegerValue::*;
+    Ok(match (&self, &other) {
+      (U8(l), U8(r)) => SymU8::le(l, r),
+      (U64(l), U64(r)) => SymU64::le(l, r),
+      (U128(l), U128(r)) => SymU128::le(l, r),
+      (l, r) => {
+        let msg = format!("Cannot le {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    })
+  }
+
+  pub fn gt(self, other: Self) -> VMResult<SymBool<'ctx>> {
+    use SymIntegerValue::*;
+    Ok(match (&self, &other) {
+      (U8(l), U8(r)) => SymU8::gt(l, r),
+      (U64(l), U64(r)) => SymU64::gt(l, r),
+      (U128(l), U128(r)) => SymU128::gt(l, r),
+      (l, r) => {
+        let msg = format!("Cannot gt {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    })
+  }
+
+  pub fn ge(self, other: Self) -> VMResult<SymBool<'ctx>> {
+    use SymIntegerValue::*;
+    Ok(match (&self, &other) {
+      (U8(l), U8(r)) => SymU8::ge(l, r),
+      (U64(l), U64(r)) => SymU64::ge(l, r),
+      (U128(l), U128(r)) => SymU128::ge(l, r),
+      (l, r) => {
+        let msg = format!("Cannot ge {:?} and {:?}", l, r);
+        return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
+      }
+    })
+  }
+
+  pub fn into_value(self) -> SymValue<'ctx> {
+    use SymIntegerValue::*;
+
+    match self {
+      U8(x) => SymValue::from_sym_u8(x),
+      U64(x) => SymValue::from_sym_u64(x),
+      U128(x) => SymValue::from_sym_u128(x),
+    }
+  }
+}
+
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymU8<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymU8<'ctx>> {
+    match value.0 {
+      SymValueImpl::U8(u) => Ok(u),
       _ => {
-        let msg = format!("Cannot convert {:?} to ast.", self.0);
+        let msg = format!("Cannot cast {:?} to SymU8", value);
         Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
       }
     }
   }
 }
 
-// Should be deleted
-impl<'ctx> From<ast::BV<'ctx>> for SymValue<'ctx> {
-  fn from(ast_bv: ast::BV<'ctx>) -> SymValue<'ctx> {
-    match ast_bv.get_size() {
-      8 => SymValue(SymValueImpl::U8(ast_bv)),
-      64 => SymValue(SymValueImpl::U64(ast_bv)),
-      128 => SymValue(SymValueImpl::U128(ast_bv)),
-      _ => panic!(
-        "Trying to implicitly convert a bitvector of size {:?} to SymValue",
-        ast_bv.get_size()
-      ),
-    }
-  }
-}
-
-// Should be deleted
-impl<'ctx> From<ast::Bool<'ctx>> for SymValue<'ctx> {
-  fn from(ast_bool: ast::Bool<'ctx>) -> SymValue<'ctx> {
-    SymValue(SymValueImpl::Bool(ast_bool))
-  }
-}
-
-impl<'ctx> From<SymValue<'ctx>> for VMResult<ast::BV<'ctx>> {
-  fn from(value: SymValue<'ctx>) -> VMResult<ast::BV<'ctx>> {
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymU64<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymU64<'ctx>> {
     match value.0 {
-      SymValueImpl::U8(ast) => Ok(ast),
-      SymValueImpl::U64(ast) => Ok(ast),
-      SymValueImpl::U128(ast) => Ok(ast),
+      SymValueImpl::U64(u) => Ok(u),
       _ => {
-        let msg = format!("Cannot cast {:?} to ast::BV", value);
+        let msg = format!("Cannot cast {:?} to SymU64", value);
         Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
       }
     }
   }
 }
 
-impl<'ctx> From<SymValue<'ctx>> for VMResult<ast::Bool<'ctx>> {
-  fn from(value: SymValue<'ctx>) -> VMResult<ast::Bool<'ctx>> {
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymU128<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymU128<'ctx>> {
     match value.0 {
-      SymValueImpl::Bool(ast) => Ok(ast),
+      SymValueImpl::U128(u) => Ok(u),
       _ => {
-        let msg = format!("Cannot cast {:?} to ast::BV", value);
+        let msg = format!("Cannot cast {:?} to SymU128", value);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
+    }
+  }
+}
+
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymIntegerValue<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymIntegerValue<'ctx>> {
+    match value.0 {
+      SymValueImpl::U8(i) => Ok(SymIntegerValue::U8(i)),
+      SymValueImpl::U64(i) => Ok(SymIntegerValue::U64(i)),
+      SymValueImpl::U128(i) => Ok(SymIntegerValue::U128(i)),
+      _ => {
+        let msg = format!("Cannot cast {:?} to integer", value);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
+    }
+  }
+}
+
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymBool<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymBool<'ctx>> {
+    match value.0 {
+      SymValueImpl::Bool(b) => Ok(b),
+      _ => {
+        let msg = format!("Cannot cast {:?} to SymBool", value);
         Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
       }
     }
@@ -335,7 +570,7 @@ impl<'ctx> SymMutVal<'ctx> {
     self.0.replace(value.0);
   }
 
-  fn equals(&self, v2: &SymMutVal<'ctx>) -> VMResult<z3::ast::Bool<'ctx>> {
+  fn equals(&self, v2: &SymMutVal<'ctx>) -> VMResult<SymBool<'ctx>> {
     self.peek().equals(&v2.peek())
   }
 
@@ -371,13 +606,13 @@ impl<'ctx> SymMutVal<'ctx> {
 }
 
 impl<'ctx> SymStruct<'ctx> {
-  pub fn new(ctx: &'ctx Context, values: Vec<SymValue<'ctx>>) -> Self {
+  pub fn new(solver: &'ctx Solver<'ctx>, values: Vec<SymValue<'ctx>>) -> Self {
     let mut fields = vec![];
     for value in values {
       fields.push(SymMutVal::new(value));
     }
 
-    SymStruct { ctx, fields }
+    SymStruct { solver, fields }
   }
   pub fn get_field_value(&self, field_offset: usize) -> VMResult<SymValue<'ctx>> {
     if let Some(field_ref) = self.fields.get(field_offset) {
@@ -404,11 +639,14 @@ impl<'ctx> SymStruct<'ctx> {
     for value in &self.fields {
       values.push(value.copy_value()?);
     }
-    Ok(SymValue::from_sym_struct(SymStruct::new(self.ctx, values)))
+    Ok(SymValue::from_sym_struct(SymStruct::new(
+      self.solver,
+      values,
+    )))
   }
 
-  pub fn equals(&self, s2: &SymStruct<'ctx>) -> VMResult<ast::Bool<'ctx>> {
-    if self.ctx != s2.ctx {
+  pub fn equals(&self, s2: &SymStruct<'ctx>) -> VMResult<SymBool<'ctx>> {
+    if self.solver != s2.solver {
       let msg = format!(
         "Equals on struct with different context: {:?} and {:?}",
         self, s2
@@ -419,9 +657,9 @@ impl<'ctx> SymStruct<'ctx> {
       let msg = format!("Equals on different types {:?} for {:?}", self, s2);
       return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
     }
-    let mut res = ast::Bool::from_bool(self.ctx, true);
+    let mut res = SymBool::from(self.solver, true);
     for (v1, v2) in self.fields.iter().zip(&s2.fields) {
-      res = res.and(&[&v1.equals(v2)?]);
+      res = res.and(&v1.equals(v2)?);
     }
     Ok(res)
   }
@@ -453,7 +691,7 @@ impl<'ctx> SymReference<'ctx> {
     self.0.write_value(value);
   }
 
-  fn equals(&self, ref2: &SymReference<'ctx>) -> VMResult<ast::Bool<'ctx>> {
+  fn equals(&self, ref2: &SymReference<'ctx>) -> VMResult<SymBool<'ctx>> {
     self.0.equals(&ref2.0)
   }
 }
