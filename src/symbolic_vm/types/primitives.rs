@@ -28,6 +28,18 @@ impl<'ctx> SymU8<'ctx> {
     SymU8(BV::fresh_const(solver.ctx(), prefix, 8))
   }
 
+  pub fn cast_u64(self) -> SymU64<'ctx> {
+    SymU64::from_ast(self.0.zero_ext(64 - 8))
+  }
+
+  pub fn cast_u128(self) -> SymU128<'ctx> {
+    SymU128::from_ast(self.0.zero_ext(128 - 8))
+  }
+
+  pub fn as_inner(&self) -> &BV<'ctx> {
+    &self.0
+  }
+
   // Should drop self after collected?
   pub fn collect(self) -> Dynamic<'ctx> {
     Dynamic::from_ast(&self.0)
@@ -107,6 +119,18 @@ impl<'ctx> SymU64<'ctx> {
 
   pub fn new(solver: &'ctx Solver, prefix: &str) -> Self {
     SymU64(BV::fresh_const(solver.ctx(), prefix, 64))
+  }
+
+  pub fn cast_u8(self) -> SymU8<'ctx> {
+    SymU8::from_ast(self.0.extract(7, 0))
+  }
+
+  pub fn cast_u128(self) -> SymU128<'ctx> {
+    SymU128::from_ast(self.0.zero_ext(128 - 64))
+  }
+
+  pub fn as_inner(&self) -> &BV<'ctx> {
+    &self.0
   }
 
   pub fn collect(self) -> Dynamic<'ctx> {
@@ -190,6 +214,18 @@ impl<'ctx> SymU128<'ctx> {
 
   pub fn new(solver: &'ctx Solver, prefix: &str) -> Self {
     SymU128(BV::fresh_const(solver.ctx(), prefix, 128))
+  }
+
+  pub fn cast_u8(self) -> SymU8<'ctx> {
+    SymU8::from_ast(self.0.extract(7, 0))
+  }
+
+  pub fn cast_u64(self) -> SymU64<'ctx> {
+    SymU64::from_ast(self.0.extract(63, 0))
+  }
+
+  pub fn as_inner(&self) -> &BV<'ctx> {
+    &self.0
   }
 
   pub fn collect(self) -> Dynamic<'ctx> {

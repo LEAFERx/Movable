@@ -465,6 +465,33 @@ impl<'ctx> SymIntegerValue<'ctx> {
     })
   }
 
+  pub fn cast_u8(self) -> SymU8<'ctx> {
+    use SymIntegerValue::*;
+    match self {
+      U8(x) => x,
+      U64(x) => x.cast_u8(),
+      U128(x) => x.cast_u8(),
+    }
+  }
+
+  pub fn cast_u64(self) -> SymU64<'ctx> {
+    use SymIntegerValue::*;
+    match self {
+      U8(x) => x.cast_u64(),
+      U64(x) => x,
+      U128(x) => x.cast_u64(),
+    }
+  }
+
+  pub fn cast_u128(self) -> SymU128<'ctx> {
+    use SymIntegerValue::*;
+    match self {
+      U8(x) => x.cast_u128(),
+      U64(x) => x.cast_u128(),
+      U128(x) => x,
+    }
+  }
+
   pub fn into_value(self) -> SymValue<'ctx> {
     use SymIntegerValue::*;
 
@@ -532,6 +559,67 @@ impl<'ctx> From<SymValue<'ctx>> for VMResult<SymBool<'ctx>> {
       SymValueImpl::Bool(b) => Ok(b),
       _ => {
         let msg = format!("Cannot cast {:?} to SymBool", value);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
+    }
+  }
+}
+
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymAccountAddress<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymAccountAddress<'ctx>> {
+    match value.0 {
+      SymValueImpl::Address(address) => Ok(address),
+      _ => {
+        let msg = format!("Cannot cast {:?} to Address", value);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
+    }
+  }
+}
+
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymByteArray<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymByteArray<'ctx>> {
+    match value.0 {
+      SymValueImpl::ByteArray(byte_array) => Ok(byte_array),
+      _ => {
+        let msg = format!("Cannot cast {:?} to ByteArray", value);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
+    }
+  }
+}
+
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymStruct<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymStruct<'ctx>> {
+    match value.0 {
+      SymValueImpl::Struct(s) => Ok(s),
+      _ => {
+        let msg = format!("Cannot cast {:?} to Struct", value);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
+    }
+  }
+}
+
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymReferenceValue<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymReferenceValue<'ctx>> {
+    match value.0 {
+      SymValueImpl::Reference(reference) => Ok(SymReferenceValue::Reference(reference)),
+      // SymValueImpl::GlobalRef(reference) => Ok(SymReferenceValue::GlobalRef(reference)),
+      _ => {
+        let msg = format!("Cannot cast {:?} to ReferenceValue", value);
+        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+      }
+    }
+  }
+}
+
+impl<'ctx> From<SymValue<'ctx>> for VMResult<SymReference<'ctx>> {
+  fn from(value: SymValue<'ctx>) -> VMResult<SymReference<'ctx>> {
+    match value.0 {
+      SymValueImpl::Reference(reference) => Ok(reference),
+      _ => {
+        let msg = format!("Cannot cast {:?} to Reference", value);
         Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
       }
     }

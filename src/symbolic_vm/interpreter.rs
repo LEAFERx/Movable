@@ -38,8 +38,8 @@ use crate::{
   symbolic_vm::{
     runtime::SymVMRuntime,
     types::{
-      primitives::{SymBool, SymU8},
-      value::{SymLocals, SymValue, SymIntegerValue},
+      primitives::{SymBool, SymU8, SymU64},
+      value::{SymLocals, SymValue, SymIntegerValue, SymReferenceValue, SymStruct},
     },
   },
 };
@@ -371,82 +371,82 @@ impl<'vtxn> SymInterpreter<'vtxn> {
           Bytecode::Call(idx, type_actuals_idx) => {
             return Ok(ExitCode::Call(*idx, *type_actuals_idx));
           }
-          // Bytecode::MutBorrowLoc(idx) | Bytecode::ImmBorrowLoc(idx) => {
-          //   // let opcode = match instruction {
-          //   //   Bytecode::MutBorrowLoc(_) => Opcodes::MUT_BORROW_LOC,
-          //   //   _ => Opcodes::IMM_BORROW_LOC,
-          //   // };
-          //   // gas!(const_instr: context, self, opcode)?;
-          //   self.operand_stack.push(frame.borrow_loc(*idx)?)?;
-          // }
-          // Bytecode::ImmBorrowField(fd_idx) | Bytecode::MutBorrowField(fd_idx) => {
-          //   // let opcode = match instruction {
-          //   //   Bytecode::MutBorrowField(_) => Opcodes::MUT_BORROW_FIELD,
-          //   //   _ => Opcodes::IMM_BORROW_FIELD,
-          //   // };
-          //   // gas!(const_instr: context, self, opcode)?;
-          //   let field_offset = frame.module().get_field_offset(*fd_idx)?;
-          //   let reference = self.operand_stack.pop_as::<SymReferenceValue>()?;
-          //   let field_ref = reference.borrow_field(field_offset as usize)?;
-          //   self.operand_stack.push(field_ref)?;
-          // }
-          // Bytecode::Pack(sd_idx, _) => {
-          //   let struct_def = frame.module().struct_def_at(*sd_idx);
-          //   let field_count = struct_def.declared_field_count()?;
-          //   let args = self.operand_stack.popn(field_count)?;
-          //   // let size = args.iter().fold(
-          //   //   AbstractMemorySize::new(GasCarrier::from(field_count)),
-          //   //   |acc, arg| acc.add(arg.size()),
-          //   // );
-          //   // gas!(instr: context, self, Opcodes::PACK, size)?;
-          //   self.operand_stack.push(SymValue::struct_(Struct::new(args)))?;
-          // }
-          // Bytecode::Unpack(sd_idx, _) => {
-          //   let struct_def = frame.module().struct_def_at(*sd_idx);
-          //   let field_count = struct_def.declared_field_count()?;
-          //   let struct_ = self.operand_stack.pop_as::<Struct>()?;
-          //   // gas!(
-          //   //   instr: context,
-          //   //   self,
-          //   //   Opcodes::UNPACK,
-          //   //   AbstractMemorySize::new(GasCarrier::from(field_count))
-          //   // )?;
-          //   // TODO: Whether or not we want this gas metering in the loop is
-          //   // questionable.  However, if we don't have it in the loop we could wind up
-          //   // doing a fair bit of work before charging for it.
-          //   for idx in 0..field_count {
-          //     let value = struct_.get_field_value(idx as usize)?;
-          //     // gas!(instr: context, self, Opcodes::UNPACK, value.size())?;
-          //     self.operand_stack.push(value)?;
-          //   }
-          // }
-          // Bytecode::ReadRef => {
-          //   let reference = self.operand_stack.pop_as::<ReferenceValue>()?;
-          //   let value = reference.read_ref()?;
-          //   // gas!(instr: context, self, Opcodes::READ_REF, value.size())?;
-          //   self.operand_stack.push(value)?;
-          // }
-          // Bytecode::WriteRef => {
-          //   let reference = self.operand_stack.pop_as::<ReferenceValue>()?;
-          //   let value = self.operand_stack.pop()?;
-          //   // gas!(instr: context, self, Opcodes::WRITE_REF, value.size())?;
-          //   reference.write_ref(value);
-          // }
-          // Bytecode::CastU8 => {
-          //   // gas!(const_instr: context, self, Opcodes::CAST_U8)?;
-          //   let integer_value = self.operand_stack.pop_as::<IntegerValue>()?;
-          //   self.operand_stack.push(SymValue::u8(integer_value.into()))?;
-          // }
-          // Bytecode::CastU64 => {
-          //   // gas!(const_instr: context, self, Opcodes::CAST_U64)?;
-          //   let integer_value = self.operand_stack.pop_as::<IntegerValue>()?;
-          //   self.operand_stack.push(SymValue::u64(integer_value.into()))?;
-          // }
-          // Bytecode::CastU128 => {
-          //   // gas!(const_instr: context, self, Opcodes::CAST_U128)?;
-          //   let integer_value = self.operand_stack.pop_as::<IntegerValue>()?;
-          //   self.operand_stack.push(SymValue::u128(integer_value.into()))?;
-          // }
+          Bytecode::MutBorrowLoc(idx) | Bytecode::ImmBorrowLoc(idx) => {
+            // let opcode = match instruction {
+            //   Bytecode::MutBorrowLoc(_) => Opcodes::MUT_BORROW_LOC,
+            //   _ => Opcodes::IMM_BORROW_LOC,
+            // };
+            // gas!(const_instr: context, self, opcode)?;
+            self.operand_stack.push(frame.borrow_loc(*idx)?)?;
+          }
+          Bytecode::ImmBorrowField(fd_idx) | Bytecode::MutBorrowField(fd_idx) => {
+            // let opcode = match instruction {
+            //   Bytecode::MutBorrowField(_) => Opcodes::MUT_BORROW_FIELD,
+            //   _ => Opcodes::IMM_BORROW_FIELD,
+            // };
+            // gas!(const_instr: context, self, opcode)?;
+            let field_offset = frame.module().get_field_offset(*fd_idx)?;
+            let reference = self.operand_stack.pop_as::<SymReferenceValue>()?;
+            let field_ref = reference.borrow_field(field_offset as usize)?;
+            self.operand_stack.push(field_ref)?;
+          }
+          Bytecode::Pack(sd_idx, _) => {
+            let struct_def = frame.module().struct_def_at(*sd_idx);
+            let field_count = struct_def.declared_field_count()?;
+            let args = self.operand_stack.popn(field_count)?;
+            // let size = args.iter().fold(
+            //   AbstractMemorySize::new(GasCarrier::from(field_count)),
+            //   |acc, arg| acc.add(arg.size()),
+            // );
+            // gas!(instr: context, self, Opcodes::PACK, size)?;
+            self.operand_stack.push(SymValue::from_sym_struct(SymStruct::new(solver, args)))?;
+          }
+          Bytecode::Unpack(sd_idx, _) => {
+            let struct_def = frame.module().struct_def_at(*sd_idx);
+            let field_count = struct_def.declared_field_count()?;
+            let struct_ = self.operand_stack.pop_as::<SymStruct>()?;
+            // gas!(
+            //   instr: context,
+            //   self,
+            //   Opcodes::UNPACK,
+            //   AbstractMemorySize::new(GasCarrier::from(field_count))
+            // )?;
+            // TODO: Whether or not we want this gas metering in the loop is
+            // questionable.  However, if we don't have it in the loop we could wind up
+            // doing a fair bit of work before charging for it.
+            for idx in 0..field_count {
+              let value = struct_.get_field_value(idx as usize)?;
+              // gas!(instr: context, self, Opcodes::UNPACK, value.size())?;
+              self.operand_stack.push(value)?;
+            }
+          }
+          Bytecode::ReadRef => {
+            let reference = self.operand_stack.pop_as::<SymReferenceValue>()?;
+            let value = reference.read_ref()?;
+            // gas!(instr: context, self, Opcodes::READ_REF, value.size())?;
+            self.operand_stack.push(value)?;
+          }
+          Bytecode::WriteRef => {
+            let reference = self.operand_stack.pop_as::<SymReferenceValue>()?;
+            let value = self.operand_stack.pop()?;
+            // gas!(instr: context, self, Opcodes::WRITE_REF, value.size())?;
+            reference.write_ref(value);
+          }
+          Bytecode::CastU8 => {
+            // gas!(const_instr: context, self, Opcodes::CAST_U8)?;
+            let integer_value = self.operand_stack.pop_as::<SymIntegerValue>()?;
+            self.operand_stack.push(SymValue::from_sym_u8(integer_value.cast_u8()))?;
+          }
+          Bytecode::CastU64 => {
+            // gas!(const_instr: context, self, Opcodes::CAST_U64)?;
+            let integer_value = self.operand_stack.pop_as::<SymIntegerValue>()?;
+            self.operand_stack.push(SymValue::from_sym_u64(integer_value.cast_u64()))?;
+          }
+          Bytecode::CastU128 => {
+            // gas!(const_instr: context, self, Opcodes::CAST_U128)?;
+            let integer_value = self.operand_stack.pop_as::<SymIntegerValue>()?;
+            self.operand_stack.push(SymValue::from_sym_u128(integer_value.cast_u128()))?;
+          }
           // Arithmetic Operations
           Bytecode::Add => {
             // gas!(const_instr: context, self, Opcodes::ADD)?;
@@ -520,11 +520,18 @@ impl<'vtxn> SymInterpreter<'vtxn> {
             // gas!(const_instr: context, self, Opcodes::GE)?;
             self.binop_bool(SymIntegerValue::ge)?
           }
-          // Bytecode::Abort => {
-          //   // gas!(const_instr: context, self, Opcodes::ABORT)?;
-          //   let error_code = self.operand_stack.pop_as::<u64>()?;
-          //   return Err(VMStatus::new(StatusCode::ABORTED).with_sub_status(error_code));
-          // }
+          Bytecode::Abort => {
+            // gas!(const_instr: context, self, Opcodes::ABORT)?;
+            let sym_error_code = self.operand_stack.pop_as::<SymU64>()?;
+            let error_code = sym_error_code.as_inner().as_u64();
+            return match error_code {
+              Some(code) => Err(VMStatus::new(StatusCode::ABORTED).with_sub_status(code)),
+              None => {
+                let msg = format!("With Symbolic Error Code {:?}", error_code);
+                Err(VMStatus::new(StatusCode::ABORTED).with_message(msg))
+              }
+            }
+          }
           Bytecode::Eq => {
             let lhs = self.operand_stack.pop()?;
             let rhs = self.operand_stack.pop()?;
