@@ -39,7 +39,7 @@ enum SymValueImpl<'ctx> {
   U64(SymU64<'ctx>),
   U128(SymU128<'ctx>),
   // We do not symbolify account address
-  // This is only a wrapper to preserve a ref tp Z3 context
+  // This is only a wrapper to preserve a ref to Z3 context
   Address(SymAccountAddress<'ctx>),
   Bool(SymBool<'ctx>),
   ByteArray(SymByteArray<'ctx>),
@@ -182,7 +182,7 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(value)
   }
 
-  pub fn from_u8(solver: &'ctx Solver, value: u8) -> Self {
+  pub fn from_u8(solver: &Solver<'ctx>, value: u8) -> Self {
     SymValue(SymValueImpl::U8(SymU8::from(solver, value)))
   }
 
@@ -190,11 +190,11 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::U8(sym))
   }
 
-  pub fn new_u8(solver: &'ctx Solver, prefix: &str) -> Self {
+  pub fn new_u8(solver: &Solver<'ctx>, prefix: &str) -> Self {
     SymValue(SymValueImpl::U8(SymU8::new(solver, prefix)))
   }
 
-  pub fn from_u64(solver: &'ctx Solver, value: u64) -> Self {
+  pub fn from_u64(solver: &Solver<'ctx>, value: u64) -> Self {
     SymValue(SymValueImpl::U64(SymU64::from(solver, value)))
   }
 
@@ -202,11 +202,11 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::U64(sym))
   }
 
-  pub fn new_u64(solver: &'ctx Solver, prefix: &str) -> Self {
+  pub fn new_u64(solver: &Solver<'ctx>, prefix: &str) -> Self {
     SymValue(SymValueImpl::U64(SymU64::new(solver, prefix)))
   }
 
-  pub fn from_u128(solver: &'ctx Solver, value: u128) -> Self {
+  pub fn from_u128(solver: &Solver<'ctx>, value: u128) -> Self {
     SymValue(SymValueImpl::U128(SymU128::from(solver, value)))
   }
 
@@ -214,7 +214,7 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::U128(sym))
   }
 
-  pub fn new_u128(solver: &'ctx Solver, prefix: &str) -> Self {
+  pub fn new_u128(solver: &Solver<'ctx>, prefix: &str) -> Self {
     SymValue(SymValueImpl::U128(SymU128::new(solver, prefix)))
   }
 
@@ -228,7 +228,7 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::Address(address))
   }
 
-  pub fn from_bool(solver: &'ctx Solver, value: bool) -> Self {
+  pub fn from_bool(solver: &Solver<'ctx>, value: bool) -> Self {
     SymValue(SymValueImpl::Bool(SymBool::from(solver, value)))
   }
 
@@ -236,7 +236,7 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::Bool(sym))
   }
 
-  pub fn new_bool(solver: &'ctx Solver, prefix: &str) -> Self {
+  pub fn new_bool(solver: &Solver<'ctx>, prefix: &str) -> Self {
     SymValue(SymValueImpl::Bool(SymBool::new(solver, prefix)))
   }
 

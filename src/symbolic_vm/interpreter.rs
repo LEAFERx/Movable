@@ -89,19 +89,19 @@ fn derive_type_tag(
   }
 }
 
-pub struct SymInterpreter<'vtxn> {
-  operand_stack: SymStack<'vtxn>,
-  call_stack: CallStack<'vtxn>,
+pub struct SymInterpreter<'vtxn, 'ctx> {
+  operand_stack: SymStack<'ctx>,
+  call_stack: CallStack<'vtxn, 'ctx>,
 }
 
-impl<'vtxn> SymInterpreter<'vtxn> {
+impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   pub fn execute_function(
-    solver: &'vtxn Solver,
+    solver: &'ctx Solver<'ctx>,
     interp_context: &mut dyn InterpreterContext,
-    runtime: &'vtxn SymVMRuntime<'vtxn, '_>,
+    runtime: &'vtxn SymVMRuntime<'ctx, '_>,
     module: &ModuleId,
     function_name: &IdentStr,
-    // args: Vec<SymValue<'vtxn>>,
+    args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
     let mut interp = Self::new();
     let loaded_module = runtime.get_loaded_module(module, interp_context)?;
@@ -111,7 +111,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
       .ok_or_else(|| VMStatus::new(StatusCode::LINKER_ERROR))?;
     let func = FunctionRef::new(loaded_module, *func_idx);
 
-    interp.execute(solver, runtime, interp_context, func)
+    interp.execute(solver, runtime, interp_context, func, args)
   }
 
   fn new() -> Self {
@@ -123,28 +123,12 @@ impl<'vtxn> SymInterpreter<'vtxn> {
 
   fn execute(
     &mut self,
-    solver: &'vtxn Solver,
-    runtime: &'vtxn SymVMRuntime<'vtxn, '_>,
+    solver: &'ctx Solver<'ctx>,
+    runtime: &'vtxn SymVMRuntime<'ctx, '_>,
     interp_context: &mut dyn InterpreterContext,
     function: FunctionRef<'vtxn>,
-    // args: Vec<SymValue<'vtxn>>,
+    args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
-    // Construct symbolic arguments
-    // Should do it outside
-    // Also implement other types
-    let mut args = vec![];
-    let prefix = "TestFuncArgs";
-    for sig in function.signature().arg_types.clone() {
-      let val = match sig {
-        SignatureToken::Bool => SymValue::new_bool(solver, prefix),
-        SignatureToken::U8 => SymValue::new_u8(solver, prefix),
-        SignatureToken::U64 => SymValue::new_u64(solver, prefix),
-        SignatureToken::U128 => SymValue::new_u128(solver, prefix),
-        _ => unimplemented!(),
-      };
-      args.push(val);
-    }
-
     let mut msg = String::from("\n-------------------------\n");
 
     let mut locals = SymLocals::new(function.local_count());
@@ -152,7 +136,6 @@ impl<'vtxn> SymInterpreter<'vtxn> {
       locals.store_loc(i, value)?;
     }
     let mut current_frame = Frame::new(function, vec![], vec![], locals);
-    println!("{:#?}", current_frame.code_definition());
     loop {
       let code = current_frame.code_definition();
       let exit_code = self
@@ -268,12 +251,12 @@ impl<'vtxn> SymInterpreter<'vtxn> {
 
   fn execute_code_unit(
     &mut self,
-    solver: &'vtxn Solver,
-    _runtime: &'vtxn SymVMRuntime<'vtxn, '_>,
+    solver: &'ctx Solver<'ctx>,
+    _runtime: &'vtxn SymVMRuntime<'ctx, '_>,
     _interp_context: &mut dyn InterpreterContext,
-    frame: &mut Frame<'vtxn, FunctionRef<'vtxn>>,
+    frame: &mut Frame<'vtxn, 'ctx, FunctionRef<'vtxn>>,
     code: &[Bytecode],
-  ) -> VMResult<ExitCode<'vtxn>> {
+  ) -> VMResult<ExitCode<'ctx>> {
     loop {
       for instruction in &code[frame.pc as usize..] {
         frame.pc += 1;
@@ -498,11 +481,11 @@ impl<'vtxn> SymInterpreter<'vtxn> {
           }
           Bytecode::Or => {
             // gas!(const_instr: context, self, Opcodes::OR)?;
-            self.binop_bool(|l: SymBool<'vtxn>, r| Ok(l.or(&r)))?
+            self.binop_bool(|l: SymBool<'ctx>, r| Ok(l.or(&r)))?
           }
           Bytecode::And => {
             // gas!(const_instr: context, self, Opcodes::AND)?;
-            self.binop_bool(|l: SymBool<'vtxn>, r| Ok(l.and(&r)))?
+            self.binop_bool(|l: SymBool<'ctx>, r| Ok(l.and(&r)))?
           }
           Bytecode::Lt => {
             // gas!(const_instr: context, self, Opcodes::LT)?;
@@ -658,13 +641,13 @@ impl<'vtxn> SymInterpreter<'vtxn> {
 
   fn make_call_frame(
     &mut self,
-    runtime: &'vtxn SymVMRuntime<'vtxn, '_>,
+    runtime: &'vtxn SymVMRuntime<'ctx, '_>,
     interp_context: &mut dyn InterpreterContext,
     module: &LoadedModule,
     idx: FunctionHandleIndex,
     type_actual_tags: Vec<TypeTag>,
     type_actuals: Vec<Type>,
-  ) -> VMResult<Option<Frame<'vtxn, FunctionRef<'vtxn>>>> {
+  ) -> VMResult<Option<Frame<'vtxn, 'ctx, FunctionRef<'vtxn>>>> {
     let func = runtime.resolve_function_ref(module, idx, interp_context)?;
     if func.is_native() {
       unimplemented!();
@@ -688,12 +671,11 @@ impl<'vtxn> SymInterpreter<'vtxn> {
   fn binop<F, T>(&mut self, f: F) -> VMResult<()>
   where
     T: Debug,
-    VMResult<T>: From<SymValue<'vtxn>>,
-    F: FnOnce(T, T) -> VMResult<SymValue<'vtxn>>,
+    VMResult<T>: From<SymValue<'ctx>>,
+    F: FnOnce(T, T) -> VMResult<SymValue<'ctx>>,
   {
     let rhs = self.operand_stack.pop_as::<T>()?;
     let lhs = self.operand_stack.pop_as::<T>()?;
-    println!("{:?} {:?}", rhs, lhs);
     let result = f(lhs, rhs)?;
     self.operand_stack.push(result)
   }
@@ -701,7 +683,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
   /// Perform a binary operation for integer values.
   fn binop_int<F>(&mut self, f: F) -> VMResult<()>
   where
-    F: FnOnce(SymIntegerValue<'vtxn>, SymIntegerValue<'vtxn>) -> VMResult<SymIntegerValue<'vtxn>>,
+    F: FnOnce(SymIntegerValue<'ctx>, SymIntegerValue<'ctx>) -> VMResult<SymIntegerValue<'ctx>>,
   {
     self.binop(|lhs, rhs| {
       Ok(match f(lhs, rhs)? {
@@ -716,8 +698,8 @@ impl<'vtxn> SymInterpreter<'vtxn> {
   fn binop_bool<F, T>(&mut self, f: F) -> VMResult<()>
   where
     T: Debug,
-    VMResult<T>: From<SymValue<'vtxn>>,
-    F: FnOnce(T, T) -> VMResult<SymBool<'vtxn>>,
+    VMResult<T>: From<SymValue<'ctx>>,
+    F: FnOnce(T, T) -> VMResult<SymBool<'ctx>>,
   {
     self.binop(|lhs, rhs| Ok(SymValue::from_sym_bool(f(lhs, rhs)?)))
   }
@@ -730,7 +712,7 @@ impl<'vtxn> SymInterpreter<'vtxn> {
   fn maybe_core_dump(
     &self,
     mut err: VMStatus,
-    current_frame: &Frame<'vtxn, FunctionRef<'vtxn>>,
+    current_frame: &Frame<'vtxn, 'ctx, FunctionRef<'vtxn>>,
   ) -> VMStatus {
     // a verification error cannot happen at runtime so change it into an invariant violation.
     if err.status_type() == StatusType::Verification {
@@ -756,7 +738,10 @@ impl<'vtxn> SymInterpreter<'vtxn> {
   /// It is used when generating a core dump but can be used for debugging of the interpreter.
   /// It will be exposed via a debug module to give developers a way to print the internals
   /// of an execution.
-  fn get_internal_state(&self, current_frame: &Frame<'vtxn, FunctionRef<'vtxn>>) -> String {
+  fn get_internal_state(
+    &self,
+    current_frame: &Frame<'vtxn, 'ctx, FunctionRef<'vtxn>>
+  ) -> String {
     let mut internal_state = "Call stack:\n".to_string();
     for (i, frame) in self.call_stack.0.iter().enumerate() {
       internal_state.push_str(
@@ -800,7 +785,11 @@ impl<'vtxn> SymInterpreter<'vtxn> {
 
   #[allow(dead_code)]
   /// Generate a core dump and an `UNREACHABLE` invariant violation.
-  fn unreachable(&self, msg: &str, current_frame: &Frame<'vtxn, FunctionRef<'vtxn>>) -> VMStatus {
+  fn unreachable(
+    &self,
+    msg: &str,
+    current_frame: &Frame<'vtxn, 'ctx, FunctionRef<'vtxn>>
+  ) -> VMStatus {
     let err = VMStatus::new(StatusCode::UNREACHABLE).with_message(msg.to_string());
     self.maybe_core_dump(err, current_frame)
   }
@@ -810,9 +799,9 @@ const OPERAND_STACK_SIZE_LIMIT: usize = 1024;
 const CALL_STACK_SIZE_LIMIT: usize = 1024;
 
 #[derive(Debug)]
-struct SymStack<'vtxn>(Vec<SymValue<'vtxn>>);
+struct SymStack<'ctx>(Vec<SymValue<'ctx>>);
 
-impl<'vtxn> SymStack<'vtxn> {
+impl<'ctx> SymStack<'ctx> {
   /// Create a new empty operand stack.
   fn new() -> Self {
     SymStack(vec![])
@@ -820,7 +809,7 @@ impl<'vtxn> SymStack<'vtxn> {
 
   /// Push a `Value` on the stack if the max stack size has not been reached. Abort execution
   /// otherwise.
-  fn push(&mut self, value: SymValue<'vtxn>) -> VMResult<()> {
+  fn push(&mut self, value: SymValue<'ctx>) -> VMResult<()> {
     if self.0.len() < OPERAND_STACK_SIZE_LIMIT {
       self.0.push(value);
       Ok(())
@@ -830,7 +819,7 @@ impl<'vtxn> SymStack<'vtxn> {
   }
 
   /// Pop a `Value` off the stack or abort execution if the stack is empty.
-  fn pop(&mut self) -> VMResult<SymValue<'vtxn>> {
+  fn pop(&mut self) -> VMResult<SymValue<'ctx>> {
     self
       .0
       .pop()
@@ -841,14 +830,14 @@ impl<'vtxn> SymStack<'vtxn> {
   /// type or if the stack is empty.
   fn pop_as<T>(&mut self) -> VMResult<T>
   where
-    VMResult<T>: From<SymValue<'vtxn>>,
+    VMResult<T>: From<SymValue<'ctx>>,
   {
     self.pop()?.value_as()
   }
 
   #[allow(dead_code)]
   /// Pop n values off the stack.
-  fn popn(&mut self, n: u16) -> VMResult<Vec<SymValue<'vtxn>>> {
+  fn popn(&mut self, n: u16) -> VMResult<Vec<SymValue<'ctx>>> {
     let remaining_stack_size = self
       .0
       .len()
@@ -860,9 +849,9 @@ impl<'vtxn> SymStack<'vtxn> {
 }
 
 #[derive(Debug)]
-struct CallStack<'vtxn>(Vec<Frame<'vtxn, FunctionRef<'vtxn>>>);
+struct CallStack<'vtxn, 'ctx>(Vec<Frame<'vtxn, 'ctx, FunctionRef<'vtxn>>>);
 
-impl<'vtxn> CallStack<'vtxn> {
+impl<'vtxn, 'ctx> CallStack<'vtxn, 'ctx> {
   /// Create a new empty call stack.
   fn new() -> Self {
     CallStack(vec![])
@@ -871,8 +860,8 @@ impl<'vtxn> CallStack<'vtxn> {
   /// Push a `Frame` on the call stack.
   fn push(
     &mut self,
-    frame: Frame<'vtxn, FunctionRef<'vtxn>>,
-  ) -> ::std::result::Result<(), Frame<'vtxn, FunctionRef<'vtxn>>> {
+    frame: Frame<'vtxn, 'ctx, FunctionRef<'vtxn>>,
+  ) -> ::std::result::Result<(), Frame<'vtxn, 'ctx, FunctionRef<'vtxn>>> {
     if self.0.len() < CALL_STACK_SIZE_LIMIT {
       self.0.push(frame);
       Ok(())
@@ -882,15 +871,15 @@ impl<'vtxn> CallStack<'vtxn> {
   }
 
   /// Pop a `Frame` off the call stack.
-  fn pop(&mut self) -> Option<Frame<'vtxn, FunctionRef<'vtxn>>> {
+  fn pop(&mut self) -> Option<Frame<'vtxn, 'ctx, FunctionRef<'vtxn>>> {
     self.0.pop()
   }
 }
 
 #[derive(Debug)]
-struct Frame<'vtxn, F: 'vtxn> {
+struct Frame<'vtxn, 'ctx, F: 'vtxn> {
   pc: u16,
-  locals: SymLocals<'vtxn>,
+  locals: SymLocals<'ctx>,
   function: F,
   type_actual_tags: Vec<TypeTag>,
   type_actuals: Vec<Type>,
@@ -898,17 +887,17 @@ struct Frame<'vtxn, F: 'vtxn> {
 }
 
 #[derive(Debug)]
-enum ExitCode<'vtxn> {
+enum ExitCode<'ctx> {
   /// A `Return` opcode was found.
   Return,
   /// A `Call` opcode was found.
   Call(FunctionHandleIndex, LocalsSignatureIndex),
   /// A `BrTrue / BrFalse` opcode was found.
   /// BrTrue / BrFalse, condition , offset
-  Branch(bool, SymBool<'vtxn>, CodeOffset),
+  Branch(bool, SymBool<'ctx>, CodeOffset),
 }
 
-impl<'vtxn, F> Frame<'vtxn, F>
+impl<'vtxn, 'ctx, F> Frame<'vtxn, 'ctx, F>
 where
   F: FunctionReference<'vtxn>,
 {
@@ -919,7 +908,7 @@ where
     function: F,
     type_actual_tags: Vec<TypeTag>,
     type_actuals: Vec<Type>,
-    locals: SymLocals<'vtxn>,
+    locals: SymLocals<'ctx>,
   ) -> Self {
     Frame {
       pc: 0,
@@ -943,26 +932,26 @@ where
 
   /// Copy a local from this frame at the given index. Return an error if the index is
   /// out of bounds or the local is `Invalid`.
-  fn copy_loc(&self, idx: LocalIndex) -> VMResult<SymValue<'vtxn>> {
+  fn copy_loc(&self, idx: LocalIndex) -> VMResult<SymValue<'ctx>> {
     self.locals.copy_loc(idx as usize)
   }
 
   /// Move a local from this frame at the given index. Return an error if the index is
   /// out of bounds or the local is `Invalid`.
-  fn move_loc(&mut self, idx: LocalIndex) -> VMResult<SymValue<'vtxn>> {
+  fn move_loc(&mut self, idx: LocalIndex) -> VMResult<SymValue<'ctx>> {
     self.locals.move_loc(idx as usize)
   }
 
   /// Store a `Value` into a local at the given index. Return an error if the index is
   /// out of bounds.
-  fn store_loc(&mut self, idx: LocalIndex, value: SymValue<'vtxn>) -> VMResult<()> {
+  fn store_loc(&mut self, idx: LocalIndex, value: SymValue<'ctx>) -> VMResult<()> {
     self.locals.store_loc(idx as usize, value)
   }
 
   #[allow(dead_code)]
   /// Borrow a local from this frame at the given index. Return an error if the index is
   /// out of bounds or the local is `Invalid`.
-  fn borrow_loc(&mut self, idx: LocalIndex) -> VMResult<SymValue<'vtxn>> {
+  fn borrow_loc(&mut self, idx: LocalIndex) -> VMResult<SymValue<'ctx>> {
     self.locals.borrow_loc(idx as usize)
   }
 

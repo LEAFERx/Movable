@@ -16,7 +16,7 @@ pub struct SymByteArray<'ctx> {
 }
 
 impl<'ctx> SymByteArray<'ctx> {
-  pub fn new(solver: &'ctx Solver, prefix: &str) -> Self {
+  pub fn new(solver: &Solver<'ctx>, prefix: &str) -> Self {
     let ctx = solver.ctx();
     Self {
       array: ast::Array::fresh_const(ctx, prefix, &Sort::int(ctx), &symbolic_u8_sort(ctx)),
