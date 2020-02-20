@@ -59,29 +59,8 @@ impl<'ctx> SymbolicVM<'ctx> {
     chain_state: &mut S,
     // txn_data: &TransactionMetadata,
   ) -> VMResult<()> {
-    // Construct symbolic arguments
-    // Should do it outside
-    // Also implement other types
-
     self.vm.rent(|runtime| {
-      let loaded_module = runtime.get_loaded_module(module, chain_state)?;
-      let func_idx = loaded_module
-        .function_defs_table
-        .get(function_name)
-        .ok_or_else(|| VMStatus::new(StatusCode::LINKER_ERROR))?;
-      let func = FunctionRef::new(loaded_module, *func_idx);
-      let mut args = vec![];
-      let prefix = "TestFuncArgs";
-      for sig in func.signature().arg_types.clone() {
-        let val = match sig {
-          SignatureToken::Bool => SymValue::new_bool(self.solver, prefix),
-          SignatureToken::U8 => SymValue::new_u8(self.solver, prefix),
-          SignatureToken::U64 => SymValue::new_u64(self.solver, prefix),
-          SignatureToken::U128 => SymValue::new_u128(self.solver, prefix),
-          _ => unimplemented!(),
-        };
-        args.push(val);
-      }
+      let args = construct_symbolic_args(module, function_name, self.solver, runtime, chain_state)?;
       runtime.execute_function(
         self.solver,
         chain_state,
@@ -91,4 +70,33 @@ impl<'ctx> SymbolicVM<'ctx> {
       )
     })
   }
+}
+
+//// Construct symbolic arguments
+fn construct_symbolic_args<'ctx, S: ChainState>(
+  module: &ModuleId,
+  function_name: &IdentStr,
+  solver: &Solver<'ctx>,
+  runtime: &SymVMRuntime<'ctx, '_>,
+  chain_state: &mut S,
+) -> VMResult<Vec<SymValue<'ctx>>> {
+  let loaded_module = runtime.get_loaded_module(module, chain_state)?;
+  let func_idx = loaded_module
+    .function_defs_table
+    .get(function_name)
+    .ok_or_else(|| VMStatus::new(StatusCode::LINKER_ERROR))?;
+  let func = FunctionRef::new(loaded_module, *func_idx);
+  let mut args = vec![];
+  let prefix = "TestFuncArgs";
+  for sig in func.signature().arg_types.clone() {
+    let val = match sig {
+      SignatureToken::Bool => SymValue::new_bool(solver, prefix),
+      SignatureToken::U8 => SymValue::new_u8(solver, prefix),
+      SignatureToken::U64 => SymValue::new_u64(solver, prefix),
+      SignatureToken::U128 => SymValue::new_u128(solver, prefix),
+      _ => unimplemented!(),
+    };
+    args.push(val);
+  }
+  Ok(args)
 }

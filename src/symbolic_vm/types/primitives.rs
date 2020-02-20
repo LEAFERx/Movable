@@ -1,4 +1,10 @@
+use vm::{
+  errors::*,
+};
+
 use z3::ast::{Ast, Bool, Dynamic, BV};
+
+use std::fmt;
 
 use crate::{engine::solver::Solver};
 
@@ -45,8 +51,8 @@ impl<'ctx> SymU8<'ctx> {
     Dynamic::from_ast(&self.0)
   }
 
-  pub fn equals(&self, other: &Self) -> SymBool<'ctx> {
-    SymBool(self.0._eq(&other.0))
+  pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
+    Ok(SymBool(self.0._eq(&other.0)))
   }
 
   pub fn add(&self, other: &Self) -> SymU8<'ctx> {
@@ -137,8 +143,8 @@ impl<'ctx> SymU64<'ctx> {
     Dynamic::from_ast(&self.0)
   }
 
-  pub fn equals(&self, other: &Self) -> SymBool<'ctx> {
-    SymBool(self.0._eq(&other.0))
+  pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
+    Ok(SymBool(self.0._eq(&other.0)))
   }
 
   pub fn add(&self, other: &Self) -> SymU64<'ctx> {
@@ -232,8 +238,8 @@ impl<'ctx> SymU128<'ctx> {
     Dynamic::from_ast(&self.0)
   }
 
-  pub fn equals(&self, other: &Self) -> SymBool<'ctx> {
-    SymBool(self.0._eq(&other.0))
+  pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
+    Ok(SymBool(self.0._eq(&other.0)))
   }
 
   pub fn add(&self, other: &Self) -> SymU128<'ctx> {
@@ -314,8 +320,8 @@ impl<'ctx> SymBool<'ctx> {
     Dynamic::from_ast(&self.0)
   }
 
-  pub fn equals(&self, other: &Self) -> SymBool<'ctx> {
-    SymBool(self.0._eq(&other.0))
+  pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
+    Ok(SymBool(self.0._eq(&other.0)))
   }
 
   pub fn not(&self) -> SymBool<'ctx> {
@@ -328,5 +334,29 @@ impl<'ctx> SymBool<'ctx> {
 
   pub fn or(&self, other: &Self) -> SymBool<'ctx> {
     SymBool(self.0.or(&[&other.0]))
+  }
+}
+
+impl<'ctx> fmt::Display for SymU8<'ctx> {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "SymU8({:?})", self.0)
+  }
+}
+
+impl<'ctx> fmt::Display for SymU64<'ctx> {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "SymU64({:?})", self.0)
+  }
+}
+
+impl<'ctx> fmt::Display for SymU128<'ctx> {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "SymU128({:?})", self.0)
+  }
+}
+
+impl<'ctx> fmt::Display for SymBool<'ctx> {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "SymBool({:?})", self.0)
   }
 }

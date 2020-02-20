@@ -27,6 +27,10 @@ impl<'ctx> SymAccountAddress<'ctx> {
     }
   }
 
+  pub fn short_str(&self) -> String {
+    self.address.short_str()
+  }
+
   pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
     if self.solver != other.solver {
       let msg = format!("Equals on struct with different solver context: {:?} and {:?}", self, other);

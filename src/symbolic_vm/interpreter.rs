@@ -39,7 +39,15 @@ use crate::{
     runtime::SymVMRuntime,
     types::{
       primitives::{SymBool, SymU8, SymU64},
-      value::{SymLocals, SymValue, SymIntegerValue, SymReferenceValue, SymStruct},
+      value::{
+        SymIntegerValue,
+        SymLocals,
+        SymReference,
+        SymStruct,
+        SymStructRef,
+        SymValue,
+        VMSymValueCast,
+      },
     },
   },
 };
@@ -52,40 +60,41 @@ fn derive_type_tag(
   use SignatureToken::*;
 
   match ty {
-    Bool => Ok(TypeTag::Bool),
-    Address => Ok(TypeTag::Address),
-    U8 => Ok(TypeTag::U8),
-    U64 => Ok(TypeTag::U64),
-    U128 => Ok(TypeTag::U128),
-    ByteArray => Ok(TypeTag::ByteArray),
-    TypeParameter(idx) => type_actual_tags
-      .get(*idx as usize)
-      .ok_or_else(|| {
-        VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION)
-          .with_message("Cannot derive type tag: type parameter index out of bounds.".to_string())
-      })
-      .map(|inner| inner.clone()),
-    Reference(_) | MutableReference(_) => Err(
-      VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION)
-        .with_message("Cannot derive type tag for references.".to_string()),
-    ),
-    Struct(idx, struct_type_actuals) => {
-      let struct_type_actuals_tags = struct_type_actuals
-        .iter()
-        .map(|ty| derive_type_tag(module, type_actual_tags, ty))
-        .collect::<VMResult<Vec<_>>>()?;
-      let struct_handle = module.struct_handle_at(*idx);
-      let struct_name = module.identifier_at(struct_handle.name);
-      let module_handle = module.module_handle_at(struct_handle.module);
-      let module_address = module.address_at(module_handle.address);
-      let module_name = module.identifier_at(module_handle.name);
-      Ok(TypeTag::Struct(StructTag {
-        address: *module_address,
-        module: module_name.into(),
-        name: struct_name.into(),
-        type_params: struct_type_actuals_tags,
-      }))
-    }
+      Bool => Ok(TypeTag::Bool),
+      Address => Ok(TypeTag::Address),
+      U8 => Ok(TypeTag::U8),
+      U64 => Ok(TypeTag::U64),
+      U128 => Ok(TypeTag::U128),
+      ByteArray => Ok(TypeTag::ByteArray),
+      TypeParameter(idx) => type_actual_tags
+          .get(*idx as usize)
+          .ok_or_else(|| {
+              VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
+                  "Cannot derive type tag: type parameter index out of bounds.".to_string(),
+              )
+          })
+          .map(|inner| inner.clone()),
+      Reference(_) | MutableReference(_) => {
+          Err(VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION)
+              .with_message("Cannot derive type tag for references.".to_string()))
+      }
+      Struct(idx, struct_type_actuals) => {
+          let struct_type_actuals_tags = struct_type_actuals
+              .iter()
+              .map(|ty| derive_type_tag(module, type_actual_tags, ty))
+              .collect::<VMResult<Vec<_>>>()?;
+          let struct_handle = module.struct_handle_at(*idx);
+          let struct_name = module.identifier_at(struct_handle.name);
+          let module_handle = module.module_handle_at(struct_handle.module);
+          let module_address = module.address_at(module_handle.address);
+          let module_name = module.identifier_at(module_handle.name);
+          Ok(TypeTag::Struct(StructTag {
+              address: *module_address,
+              module: module_name.into(),
+              name: struct_name.into(),
+              type_params: struct_type_actuals_tags,
+          }))
+      }
   }
 }
 
@@ -111,7 +120,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
       .ok_or_else(|| VMStatus::new(StatusCode::LINKER_ERROR))?;
     let func = FunctionRef::new(loaded_module, *func_idx);
 
-    interp.execute(solver, runtime, interp_context, func, args)
+    interp.execute_main(solver, runtime, interp_context, func, args)
   }
 
   fn new() -> Self {
@@ -121,7 +130,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     }
   }
 
-  fn execute(
+  fn execute_main(
     &mut self,
     solver: &'ctx Solver<'ctx>,
     runtime: &'vtxn SymVMRuntime<'ctx, '_>,
@@ -131,9 +140,9 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   ) -> VMResult<()> {
     let mut msg = String::from("\n-------------------------\n");
 
-    let mut locals = SymLocals::new(function.local_count());
-    for (i, value) in args.clone().into_iter().enumerate() {
-      locals.store_loc(i, value)?;
+    let mut locals = SymLocals::new(solver, function.local_count());
+    for (i, value) in args.iter().enumerate() {
+      locals.store_loc(i, value.copy_value())?;
     }
     let mut current_frame = Frame::new(function, vec![], vec![], locals);
     loop {
@@ -176,6 +185,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
 
           let opt_frame = self
             .make_call_frame(
+              solver,
               runtime,
               interp_context,
               current_frame.module(),
@@ -369,7 +379,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             // };
             // gas!(const_instr: context, self, opcode)?;
             let field_offset = frame.module().get_field_offset(*fd_idx)?;
-            let reference = self.operand_stack.pop_as::<SymReferenceValue>()?;
+            let reference = self.operand_stack.pop_as::<SymStructRef>()?;
             let field_ref = reference.borrow_field(field_offset as usize)?;
             self.operand_stack.push(field_ref)?;
           }
@@ -382,11 +392,12 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             //   |acc, arg| acc.add(arg.size()),
             // );
             // gas!(instr: context, self, Opcodes::PACK, size)?;
-            self.operand_stack.push(SymValue::from_sym_struct(SymStruct::new(solver, args)))?;
+            self.operand_stack
+              .push(SymValue::from_sym_struct(SymStruct::pack(solver, args)))?;
           }
-          Bytecode::Unpack(sd_idx, _) => {
-            let struct_def = frame.module().struct_def_at(*sd_idx);
-            let field_count = struct_def.declared_field_count()?;
+          Bytecode::Unpack(_sd_idx, _) => {
+            // let struct_def = frame.module().struct_def_at(*sd_idx);
+            // let field_count = struct_def.declared_field_count()?;
             let struct_ = self.operand_stack.pop_as::<SymStruct>()?;
             // gas!(
             //   instr: context,
@@ -397,23 +408,22 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             // TODO: Whether or not we want this gas metering in the loop is
             // questionable.  However, if we don't have it in the loop we could wind up
             // doing a fair bit of work before charging for it.
-            for idx in 0..field_count {
-              let value = struct_.get_field_value(idx as usize)?;
+            for value in struct_.unpack()? {
               // gas!(instr: context, self, Opcodes::UNPACK, value.size())?;
               self.operand_stack.push(value)?;
             }
           }
           Bytecode::ReadRef => {
-            let reference = self.operand_stack.pop_as::<SymReferenceValue>()?;
+            let reference = self.operand_stack.pop_as::<SymReference>()?;
             let value = reference.read_ref()?;
             // gas!(instr: context, self, Opcodes::READ_REF, value.size())?;
             self.operand_stack.push(value)?;
           }
           Bytecode::WriteRef => {
-            let reference = self.operand_stack.pop_as::<SymReferenceValue>()?;
+            let reference = self.operand_stack.pop_as::<SymReference>()?;
             let value = self.operand_stack.pop()?;
             // gas!(instr: context, self, Opcodes::WRITE_REF, value.size())?;
-            reference.write_ref(value);
+            reference.write_ref(value)?;
           }
           Bytecode::CastU8 => {
             // gas!(const_instr: context, self, Opcodes::CAST_U8)?;
@@ -535,7 +545,10 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             //   Opcodes::NEQ,
             //   lhs.size().add(rhs.size())
             // )?;
-            self.operand_stack.push(SymValue::from_sym_bool(lhs.not_equals(&rhs)?))?;
+            self.operand_stack
+              .push(SymValue::from_sym_bool(
+                lhs.equals(&rhs).and_then(|res| Ok(res.not()))?
+              ))?;
           }
           // Bytecode::GetTxnSenderAddress => {
           //   // gas!(const_instr: context, self, Opcodes::GET_TXN_SENDER)?;
@@ -641,6 +654,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
 
   fn make_call_frame(
     &mut self,
+    solver: &'ctx Solver<'ctx>,
     runtime: &'vtxn SymVMRuntime<'ctx, '_>,
     interp_context: &mut dyn InterpreterContext,
     module: &LoadedModule,
@@ -654,7 +668,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
       // self.call_native(runtime, interp_context, func, type_actual_tags)?;
       // Ok(None)
     } else {
-      let mut locals = SymLocals::new(func.local_count());
+      let mut locals = SymLocals::new(solver, func.local_count());
       let arg_count = func.arg_count();
       for i in 0..arg_count {
         locals.store_loc(arg_count - i - 1, self.operand_stack.pop()?)?;
@@ -671,7 +685,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   fn binop<F, T>(&mut self, f: F) -> VMResult<()>
   where
     T: Debug,
-    VMResult<T>: From<SymValue<'ctx>>,
+    SymValue<'ctx>: VMSymValueCast<T>,
     F: FnOnce(T, T) -> VMResult<SymValue<'ctx>>,
   {
     let rhs = self.operand_stack.pop_as::<T>()?;
@@ -698,7 +712,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   fn binop_bool<F, T>(&mut self, f: F) -> VMResult<()>
   where
     T: Debug,
-    VMResult<T>: From<SymValue<'ctx>>,
+    SymValue<'ctx>: VMSymValueCast<T>,
     F: FnOnce(T, T) -> VMResult<SymBool<'ctx>>,
   {
     self.binop(|lhs, rhs| Ok(SymValue::from_sym_bool(f(lhs, rhs)?)))
@@ -830,12 +844,11 @@ impl<'ctx> SymStack<'ctx> {
   /// type or if the stack is empty.
   fn pop_as<T>(&mut self) -> VMResult<T>
   where
-    VMResult<T>: From<SymValue<'ctx>>,
+    SymValue<'ctx>: VMSymValueCast<T>,
   {
     self.pop()?.value_as()
   }
 
-  #[allow(dead_code)]
   /// Pop n values off the stack.
   fn popn(&mut self, n: u16) -> VMResult<Vec<SymValue<'ctx>>> {
     let remaining_stack_size = self

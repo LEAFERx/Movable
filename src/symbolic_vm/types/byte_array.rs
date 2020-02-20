@@ -1,5 +1,11 @@
 use z3::{ast, ast::Ast, Context, Sort};
 
+use vm::{
+  errors::*,
+};
+
+use std::fmt;
+
 use crate::{
   engine::solver::Solver,
   symbolic_vm::types::primitives::SymBool,
@@ -28,8 +34,14 @@ impl<'ctx> SymByteArray<'ctx> {
     &self.length
   }
 
-  pub fn equals(&self, other: &Self) -> SymBool<'ctx> {
+  pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
     let res = self.array._eq(&other.array);
-    SymBool::from_ast(res.and(&[&self.length._eq(&other.length)]))
+    Ok(SymBool::from_ast(res.and(&[&self.length._eq(&other.length)])))
+  }
+}
+
+impl<'ctx> fmt::Display for SymByteArray<'ctx> {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    <Self as fmt::Debug>::fmt(self, f)
   }
 }
