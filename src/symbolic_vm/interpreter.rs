@@ -11,17 +11,6 @@ use vm::{
     Bytecode, CodeOffset, FunctionHandleIndex, LocalIndex, LocalsSignatureIndex, SignatureToken,
   },
 };
-use vm_runtime::{
-  execution_context::InterpreterContext,
-  loaded_data::{
-    function::{FunctionRef, FunctionReference},
-    loaded_module::LoadedModule,
-  },
-};
-use vm_runtime_types::{
-  loaded_data::{types::Type},
-  type_context::TypeContext,
-};
 
 use z3::{SatResult};
 

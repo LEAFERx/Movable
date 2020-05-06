@@ -4,7 +4,7 @@ version = "0.0.0"
 authors = ["LEAFERx <leaferx@outlook.com>"]
 license = "Apache-2.0"
 publish = false
-edition = "2020"
+edition = "2018"
 
 [dependencies]
 language-e2e-tests = { path = "../libra/language/e2e-tests" }
