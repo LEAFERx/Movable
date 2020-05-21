@@ -8,7 +8,7 @@ use libra_types::{
 
 use crate::{
   engine::solver::Solver,
-  symbolic_vm::types::{
+  symbolic_vm::types::values::{
     primitives::SymBool,
   },
 };

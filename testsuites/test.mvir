@@ -1,0 +1,54 @@
+module Test {
+  resource T {
+    p: u128,
+    q: u128,
+  }
+
+  public create(p: u128, q: u128): Self.T {
+    return T { p: move(p), q: move(q) };
+  }
+
+  public test1(x: u128, y: u128, z: u128, w: u128): Self.T {
+    let t1: Self.T;
+    let t2: Self.T;
+    let t3: Self.T;
+    let a1: u128;
+    let a2: u128;
+    let b1: u128;
+    let b2: u128;
+
+    t1 = T {
+      p: move(x),
+      q: move(y),
+    };
+
+    t2 = T {
+      p: move(z),
+      q: move(w),
+    };
+
+    T {
+      p: a1,
+      q: a2,
+    } = move(t1);
+
+    T {
+      p: b1,
+      q: b2,
+    } = move(t2);
+
+    if (copy(b1) > copy(b2) && copy(a1) < copy(a2)) {
+      if (copy(a2) > copy(b2)) {
+        return Self.create(move(a1), move(b2));
+      } else {
+        if (copy(a2) == copy(b1)) {
+          return Self.create(move(b2), move(a2));
+        } else {
+          return Self.create(move(a2), move(b1));
+        }
+      }
+    } else {
+      return Self.create(move(a1), move(a2));
+    }
+  }
+}

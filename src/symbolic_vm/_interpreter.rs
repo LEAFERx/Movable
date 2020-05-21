@@ -233,7 +233,9 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
                 solver.assert(&condition.as_inner());
               }
               if solver.check() == SatResult::Unsat {
-                msg += &format!("Child not satisfied, exit.\n");
+                msg += "Child not satisfied, exit.\n";
+                msg += "-------------------------\n";
+                print!("{}", msg);
                 exit(0);
               }
             }
@@ -252,9 +254,9 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     }
     msg += "Test Function Returns\n";
     for i in 0..current_frame.function.return_count() {
-      msg += &format!("  {}: {:#?}\n", i, model.eval(&self.operand_stack.pop()?.into_ast()?));
+      msg += &format!("  {}: {:#?}\n", i, self.operand_stack.pop()?);
     }
-    msg += &format!("-------------------------\n");
+    msg += "-------------------------\n";
     print!("{}", msg);
     Ok(())
   }

@@ -927,7 +927,6 @@ impl<'ctx> SymLocals<'ctx> {
 *
 **************************************************************************************/
 impl<'ctx> SymValue<'ctx> {
-
   pub fn from_u8(solver: &Solver<'ctx>, value: u8) -> Self {
     SymValue(SymValueImpl::U8(SymU8::from(solver, value)))
   }
