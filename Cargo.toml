@@ -9,9 +9,13 @@ edition = "2018"
 [dependencies]
 move-core-types = { path = "../libra/language/move-core/types" }
 move-vm-types = { path = "../libra/language/move-vm/types" }
+move-vm-runtime = { path = "../libra/language/move-vm/runtime" }
+move-vm-state = { path = "../libra/language/move-vm/state" }
+move-vm-natives = { path = "../libra/language/move-vm/natives" }
 language-e2e-tests = { path = "../libra/language/e2e-tests" }
 vm = { path = "../libra/language/vm" }
 bytecode-verifier = { path = "../libra/language/bytecode-verifier" }
+libra-crypto = { path = "../libra/crypto/crypto"}
 libra-types = { path = "../libra/types" }
 libra-logger = { path = "../libra/common/logger" }
 libra-state-view = { path = "../libra/storage/state-view" }
@@ -25,3 +29,5 @@ serde_json = "1.0"
 z3 = "0.5.1"
 nix = "0.15.0"
 rental = "0.5.4"
+
+engine = { path = "./engine", package = "movable-engine" }

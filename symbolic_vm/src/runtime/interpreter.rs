@@ -1,60 +1,73 @@
-// Copyright (c) The Libra Core Contributors
-// SPDX-License-Identifier: Apache-2.0
-
-use crate::{
-  gas,
+// use move_vm_runtime::{
+//   gas,
+//   loader::{Function, Loader, Resolver},
+//   native_functions::FunctionContext,
+//   trace,
+// };
+use crate::runtime::{
   loader::{Function, Loader, Resolver},
-  native_functions::FunctionContext,
-  trace,
+  // native_functions::FunctionContext,
 };
 use libra_logger::prelude::*;
 use libra_types::{
   access_path::AccessPath,
   account_address::AccountAddress,
-  transaction::MAX_TRANSACTION_SIZE_IN_BYTES,
+  // transaction::MAX_TRANSACTION_SIZE_IN_BYTES,
   vm_error::{StatusCode, StatusType, VMStatus},
 };
-use move_core_types::gas_schedule::{AbstractMemorySize, CostTable, GasAlgebra, GasCarrier};
+use move_core_types::gas_schedule::{AbstractMemorySize, CostTable, /* GasAlgebra, */ GasCarrier};
 use move_vm_types::{
-  gas_schedule::calculate_intrinsic_gas,
+  // gas_schedule::calculate_intrinsic_gas,
   interpreter_context::InterpreterContext,
   loaded_data::{runtime_types::Type, types::FatStructType},
   transaction_metadata::TransactionMetadata,
   // values::{self, SymIntegerValue, SymLocals, SymReference, Struct, StructRef, VMValueCast, SymValue},
 };
-use crate::symbolic_vm::types::values::{
-  SymU8, SymU64, SymU128, SymBool,
+use crate::types::values::{
+  SymU8, SymU64, /* SymU128, */ SymBool,
   SymIntegerValue, SymLocals, SymReference, SymStruct, SymStructRef, SymValue, VMValueCast,
 };
-use std::{cmp::min, collections::VecDeque, fmt::Write, sync::Arc};
+
+use z3::{SatResult};
+
+use nix::unistd::{fork, ForkResult};
+
+use std::{
+  // cmp::min,
+  // collections::VecDeque,
+  // fmt::Write,
+  sync::Arc,
+  marker::PhantomData,
+  process::exit,
+};
 use vm::{
   errors::*,
   file_format::{
     Bytecode, CodeOffset, FunctionHandleIndex, FunctionInstantiationIndex, StructDefInstantiationIndex,
     StructDefinitionIndex,
   },
-  file_format_common::Opcodes,
+  // file_format_common::Opcodes,
 };
 
-use crate::engine::solver::Solver;
+use solver::Solver;
 
-macro_rules! debug_write {
-  ($($toks: tt)*) => {
-      write!($($toks)*).map_err(|_|
-          VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-              .with_message("failed to write to buffer".to_string())
-      )
-  };
-}
+// macro_rules! debug_write {
+//   ($($toks: tt)*) => {
+//       write!($($toks)*).map_err(|_|
+//           VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+//               .with_message("failed to write to buffer".to_string())
+//       )
+//   };
+// }
 
-macro_rules! debug_writeln {
-  ($($toks: tt)*) => {
-      writeln!($($toks)*).map_err(|_|
-          VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-              .with_message("failed to write to buffer".to_string())
-      )
-  };
-}
+// macro_rules! debug_writeln {
+//   ($($toks: tt)*) => {
+//       writeln!($($toks)*).map_err(|_|
+//           VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+//               .with_message("failed to write to buffer".to_string())
+//       )
+//   };
+// }
 
 /// `Interpreter` instances can execute Move functions.
 ///
@@ -70,25 +83,27 @@ pub(crate) struct Interpreter<'vtxn, 'ctx> {
   call_stack: SymCallStack<'ctx>,
   /// Transaction data to resolve special bytecodes (e.g. GetTxnSequenceNumber, GetTxnPublicKey,
   /// GetTxnSenderAddress, ...)
-  txn_data: &'vtxn TransactionMetadata,
-  gas_schedule: &'vtxn CostTable,
+  // txn_data: &'vtxn TransactionMetadata,
+  // gas_schedule: &'vtxn CostTable,
+  phatom: PhantomData<&'vtxn CostTable>,
 }
 
 impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
   /// Entrypoint into the interpreter. All external calls need to be routed through this
   /// function.
   pub(crate) fn entrypoint(
+    solver: &'ctx Solver<'ctx>,
     context: &mut dyn InterpreterContext,
     loader: &Loader,
-    txn_data: &'vtxn TransactionMetadata,
-    gas_schedule: &'vtxn CostTable,
+    // txn_data: &'vtxn TransactionMetadata,
+    // gas_schedule: &'vtxn CostTable,
     function: Arc<Function>,
-    ty_args: Vec<Type>,
+    // ty_args: Vec<Type>,
     args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
     // We charge an intrinsic amount of gas based upon the size of the transaction submitted
     // (in raw bytes).
-    let txn_size = txn_data.transaction_size();
+    // let txn_size = txn_data.transaction_size();
     // The callers of this function verify the transaction before executing it. Transaction
     // verification ensures the following condition.
     // TODO: This is enforced by Libra but needs to be enforced by other callers of the Move VM
@@ -96,28 +111,40 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
     // assume!(txn_size.get() <= (MAX_TRANSACTION_SIZE_IN_BYTES as u64));
     // We count the intrinsic cost of the transaction here, since that needs to also cover the
     // setup of the function.
-    let mut interp = Self::new(txn_data, gas_schedule);
+    // let mut interp = Self::new(txn_data, gas_schedule);
+    let mut interp = Self::new();
     // gas!(
     //   consume: context,
     //   calculate_intrinsic_gas(txn_size, &gas_schedule.gas_constants)
     // )?;
-    interp.execute_main(loader, context, function, ty_args, args)
+    interp.execute_main(
+      solver,
+      loader,
+      context,
+      function,
+      // ty_args,
+      args
+    )
   }
 
   /// Create a new instance of an `Interpreter` in the context of a transaction with a
   /// given module cache and gas schedule.
-  fn new(txn_data: &'vtxn TransactionMetadata, gas_schedule: &'vtxn CostTable) -> Self {
+  fn new(
+    // txn_data: &'vtxn TransactionMetadata,
+    // gas_schedule: &'vtxn CostTable
+  ) -> Self {
     Interpreter {
       operand_stack: SymStack::new(),
       call_stack: SymCallStack::new(),
-      gas_schedule,
-      txn_data,
+      phatom: PhantomData,
+      // gas_schedule,
+      // txn_data,
     }
   }
 
-  pub(crate) fn gas_schedule(&self) -> &CostTable {
-    self.gas_schedule
-  }
+  // pub(crate) fn gas_schedule(&self) -> &CostTable {
+  //   self.gas_schedule
+  // }
 
   /// Main loop for the execution of a function.
   ///
@@ -129,29 +156,34 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
   // we can simplify this code quite a bit.
   fn execute_main(
     &mut self,
+    solver: &'ctx Solver<'ctx>,
     loader: &Loader,
     context: &mut dyn InterpreterContext,
     function: Arc<Function>,
-    ty_args: Vec<Type>,
-    args: Vec<SymValue>,
+    // ty_args: Vec<Type>,
+    args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
-    let mut locals = SymLocals::new(function.local_count());
+    let mut msg = String::from("\n-------------------------\n");
+  
+    let mut locals = SymLocals::new(solver, function.local_count());
     // TODO: assert consistency of args and function formals
-    for (i, value) in args.into_iter().enumerate() {
-      locals.store_loc(i, value)?;
+    for (i, value) in args.iter().enumerate() {
+      locals.store_loc(i, value.copy_value())?;
     }
-    let mut current_frame = SymFrame::new(function, ty_args, locals);
+    // let mut current_frame = SymFrame::new(function, ty_args, locals);
+    let mut current_frame = SymFrame::new(function, locals);
     loop {
       let resolver = current_frame.resolver(loader);
       let exit_code = current_frame //self
-        .execute_code(&resolver, self, context)
+        .execute_code(solver, &resolver, self, context)
         .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
       match exit_code {
         ExitCode::Return => {
           if let Some(frame) = self.call_stack.pop() {
             current_frame = frame;
           } else {
-            return Ok(());
+            // return Ok(());
+            break;
           }
         }
         ExitCode::Call(fh_idx) => {
@@ -163,13 +195,13 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
           // )?;
           let func = resolver.function_at(fh_idx);
           if func.is_native() {
-            self.call_native(&resolver, context, func, vec![])?;
+            // self.call_native(&resolver, context, func, vec![])?;
             continue;
           }
           // TODO: when a native function is executed, the current frame has not yet
           // been pushed onto the call stack. Fix it.
           let frame = self
-            .make_call_frame(func, vec![])
+            .make_call_frame(solver, func, vec![])
             .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
           self.call_stack.push(current_frame).or_else(|frame| {
             let err = VMStatus::new(StatusCode::CALL_STACK_OVERFLOW);
@@ -177,33 +209,91 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
           })?;
           current_frame = frame;
         }
-        ExitCode::CallGeneric(idx) => {
-          let func_inst = resolver.function_instantiation_at(idx);
-          // gas!(
-          //   instr: context,
-          //   self,
-          //   Opcodes::CALL_GENERIC,
-          //   AbstractMemorySize::new((func_inst.instantiation_size() + 1) as GasCarrier)
-          // )?;
-          let func = loader.function_at(func_inst.handle());
-          let ty_args = func_inst.materialize(current_frame.ty_args())?;
-          if func.is_native() {
-            self.call_native(&resolver, context, func, ty_args)?;
-            continue;
+        ExitCode::Branch(instr, condition, offset) => {
+          println!(
+            "Hit Br{{{:?}}} instr, condition is {:?}, target offset is {:?}",
+            instr,
+            condition,
+            offset,
+          );
+          // Temp use fork to explore all branch
+          // Use task stack to implement DFS later
+          match fork() {
+            Ok(ForkResult::Parent { .. }) => {
+              msg += &format!("Fork parent: assume {:?}->{:#?}\n", instr, condition);
+              if instr {
+                solver.assert(&condition.as_inner());
+              } else {
+                solver.assert(&condition.not().as_inner());
+              }
+              if solver.check() == SatResult::Unsat {
+                msg += "Parent not satisfied, exit.\n";
+                msg += "-------------------------\n";
+                print!("{}", msg);
+                exit(0);
+              }
+              current_frame.pc = offset;
+            }
+            Ok(ForkResult::Child) => {
+              msg += &format!("Fork child: assume {:?}->{:#?}\n", !instr, condition);
+              if instr {
+                solver.assert(&condition.not().as_inner());
+              } else {
+                solver.assert(&condition.as_inner());
+              }
+              if solver.check() == SatResult::Unsat {
+                msg += "Child not satisfied, exit.\n";
+                msg += "-------------------------\n";
+                print!("{}", msg);
+                exit(0);
+              }
+            }
+            Err(_) => {
+              return Err(VMStatus::new(StatusCode::ABORTED).with_message("Unable to fork, abort.".to_string()));
+            }
           }
-          // TODO: when a native function is executed, the current frame has not yet
-          // been pushed onto the call stack. Fix it.
-          let frame = self
-            .make_call_frame(func, ty_args)
-            .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
-          self.call_stack.push(current_frame).or_else(|frame| {
-            let err = VMStatus::new(StatusCode::CALL_STACK_OVERFLOW);
-            Err(self.maybe_core_dump(err, &frame))
-          })?;
-          current_frame = frame;
         }
+        _ => unimplemented!()
+        // ExitCode::CallGeneric(idx) => {
+        //   let func_inst = resolver.function_instantiation_at(idx);
+        //   // gas!(
+        //   //   instr: context,
+        //   //   self,
+        //   //   Opcodes::CALL_GENERIC,
+        //   //   AbstractMemorySize::new((func_inst.instantiation_size() + 1) as GasCarrier)
+        //   // )?;
+        //   let func = loader.function_at(func_inst.handle());
+        //   let ty_args = func_inst.materialize(current_frame.ty_args())?;
+        //   if func.is_native() {
+        //     self.call_native(&resolver, context, func, ty_args)?;
+        //     continue;
+        //   }
+        //   // TODO: when a native function is executed, the current frame has not yet
+        //   // been pushed onto the call stack. Fix it.
+        //   let frame = self
+        //     .make_call_frame(solver, func, ty_args)
+        //     .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
+        //   self.call_stack.push(current_frame).or_else(|frame| {
+        //     let err = VMStatus::new(StatusCode::CALL_STACK_OVERFLOW);
+        //     Err(self.maybe_core_dump(err, &frame))
+        //   })?;
+        //   current_frame = frame;
+        // }
       }
     }
+
+    let model = solver.get_model();
+    msg += "Test Function Arguments\n";
+    for (i, v) in args.into_iter().enumerate() {
+      msg += &format!("  {}: {:#?}\n", i, model.eval(&v.into_ast()?));
+    }
+    msg += "Test Function Returns\n";
+    for i in 0..current_frame.function.return_count() {
+      msg += &format!("  {}: {:#?}\n", i, self.operand_stack.pop()?);
+    }
+    msg += "-------------------------\n";
+    print!("{}", msg);
+    Ok(())
   }
 
   /// Returns a `SymFrame` if the call is to a Move function. Calls to native functions are
@@ -211,39 +301,43 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
   ///
   /// Native functions do not push a frame at the moment and as such errors from a native
   /// function are incorrectly attributed to the caller.
-  fn make_call_frame(&mut self, func: Arc<Function>, ty_args: Vec<Type>) -> VMResult<SymFrame<'ctx>> {
-    let mut locals = SymLocals::new(func.local_count());
+  fn make_call_frame(&mut self, solver: &'ctx Solver<'ctx>, func: Arc<Function>, ty_args: Vec<Type>) -> VMResult<SymFrame<'ctx>> {
+    let mut locals = SymLocals::new(solver, func.local_count());
     let arg_count = func.arg_count();
     for i in 0..arg_count {
       locals.store_loc(arg_count - i - 1, self.operand_stack.pop()?)?;
     }
-    Ok(SymFrame::new(func, ty_args, locals))
+    Ok(SymFrame::new(
+      func,
+      // ty_args,
+      locals
+    ))
   }
 
   /// Call a native functions.
-  fn call_native(
-    &mut self,
-    resolver: &Resolver,
-    context: &mut dyn InterpreterContext,
-    function: Arc<Function>,
-    ty_args: Vec<Type>,
-  ) -> VMResult<()> {
-    let mut arguments = VecDeque::new();
-    let expected_args = function.arg_count();
-    for _ in 0..expected_args {
-      arguments.push_front(self.operand_stack.pop()?);
-    }
-    let mut native_context = FunctionContext::new(self, context, resolver);
-    let native_function = function.get_native()?;
-    let result = native_function.dispatch(&mut native_context, ty_args, arguments)?;
-    // gas!(consume: context, result.cost)?;
-    result.result.and_then(|values| {
-      for value in values {
-        self.operand_stack.push(value)?;
-      }
-      Ok(())
-    })
-  }
+  // fn call_native(
+  //   &mut self,
+  //   resolver: &Resolver,
+  //   context: &mut dyn InterpreterContext,
+  //   function: Arc<Function>,
+  //   ty_args: Vec<Type>,
+  // ) -> VMResult<()> {
+  //   let mut arguments = VecDeque::new();
+  //   let expected_args = function.arg_count();
+  //   for _ in 0..expected_args {
+  //     arguments.push_front(self.operand_stack.pop()?);
+  //   }
+  //   let mut native_context = FunctionContext::new(self, context, resolver);
+  //   let native_function = function.get_native()?;
+  //   let result = native_function.dispatch(&mut native_context, ty_args, arguments)?;
+  //   // gas!(consume: context, result.cost)?;
+  //   result.result.and_then(|values| {
+  //     for value in values {
+  //       self.operand_stack.push(value)?;
+  //     }
+  //     Ok(())
+  //   })
+  // }
 
   /// Perform a binary operation to two values at the top of the stack.
   fn binop<F, T>(&mut self, f: F) -> VMResult<()>
@@ -311,105 +405,106 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
     op(self, context, ap, libra_type.fat_type())
   }
 
-  fn global_data_op_generic<F>(
-    &mut self,
-    resolver: &Resolver,
-    context: &mut dyn InterpreterContext,
-    address: AccountAddress,
-    idx: StructDefInstantiationIndex,
-    frame: &SymFrame,
-    op: F,
-  ) -> VMResult<AbstractMemorySize<GasCarrier>>
-  where
-    F: FnOnce(
-      &mut Self,
-      &mut dyn InterpreterContext,
-      AccessPath,
-      &FatStructType,
-    ) -> VMResult<AbstractMemorySize<GasCarrier>>,
-  {
-    let struct_inst = resolver.struct_instantiation_at(idx);
-    let mut instantiation = vec![];
-    for inst in struct_inst.get_instantiation() {
-      instantiation.push(inst.subst(frame.ty_args())?);
-    }
-    let struct_type = resolver.struct_type_at(struct_inst.get_def_idx());
-    let libra_type = resolver.get_libra_type_info(
-      &struct_type.module,
-      struct_type.name.as_ident_str(),
-      &instantiation,
-      context,
-    )?;
-    let ap = AccessPath::new(address, libra_type.resource_key().to_vec());
-    op(self, context, ap, libra_type.fat_type())
-  }
+  // fn global_data_op_generic<F>(
+  //   &mut self,
+  //   resolver: &Resolver,
+  //   context: &mut dyn InterpreterContext,
+  //   address: AccountAddress,
+  //   idx: StructDefInstantiationIndex,
+  //   frame: &SymFrame,
+  //   op: F,
+  // ) -> VMResult<AbstractMemorySize<GasCarrier>>
+  // where
+  //   F: FnOnce(
+  //     &mut Self,
+  //     &mut dyn InterpreterContext,
+  //     AccessPath,
+  //     &FatStructType,
+  //   ) -> VMResult<AbstractMemorySize<GasCarrier>>,
+  // {
+  //   let struct_inst = resolver.struct_instantiation_at(idx);
+  //   let mut instantiation = vec![];
+  //   for inst in struct_inst.get_instantiation() {
+  //     instantiation.push(inst.subst(frame.ty_args())?);
+  //   }
+  //   let struct_type = resolver.struct_type_at(struct_inst.get_def_idx());
+  //   let libra_type = resolver.get_libra_type_info(
+  //     &struct_type.module,
+  //     struct_type.name.as_ident_str(),
+  //     &instantiation,
+  //     context,
+  //   )?;
+  //   let ap = AccessPath::new(address, libra_type.resource_key().to_vec());
+  //   op(self, context, ap, libra_type.fat_type())
+  // }
 
   /// BorrowGlobal (mutable and not) opcode.
-  fn borrow_global(
-    &mut self,
-    context: &mut dyn InterpreterContext,
-    ap: AccessPath,
-    struct_ty: &FatStructType,
-  ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-    let g = context.borrow_global(&ap, struct_ty)?;
-    let size = g.size();
-    self.operand_stack.push(g.borrow_global()?)?;
-    Ok(size)
-  }
+  // fn borrow_global(
+  //   &mut self,
+  //   context: &mut dyn InterpreterContext,
+  //   ap: AccessPath,
+  //   struct_ty: &FatStructType,
+  // ) -> VMResult<AbstractMemorySize<GasCarrier>> {
+  //   let g = context.borrow_global(&ap, struct_ty)?;
+  //   let size = g.size();
+  //   self.operand_stack.push(g.borrow_global()?)?;
+  //   Ok(size)
+  // }
 
   /// Exists opcode.
   fn exists(
     &mut self,
+    solver: &'ctx Solver<'ctx>,
     context: &mut dyn InterpreterContext,
     ap: AccessPath,
     struct_ty: &FatStructType,
   ) -> VMResult<AbstractMemorySize<GasCarrier>> {
     let (exists, mem_size) = context.resource_exists(&ap, struct_ty)?;
-    self.operand_stack.push(SymValue::from_bool(exists))?;
+    self.operand_stack.push(SymValue::from_bool(solver, exists))?;
     Ok(mem_size)
   }
 
   /// MoveFrom opcode.
-  fn move_from(
-    &mut self,
-    context: &mut dyn InterpreterContext,
-    ap: AccessPath,
-    struct_ty: &FatStructType,
-  ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-    let resource = context.move_resource_from(&ap, struct_ty)?;
-    let size = resource.size();
-    self.operand_stack.push(resource)?;
-    Ok(size)
-  }
+  // fn move_from(
+  //   &mut self,
+  //   context: &mut dyn InterpreterContext,
+  //   ap: AccessPath,
+  //   struct_ty: &FatStructType,
+  // ) -> VMResult<AbstractMemorySize<GasCarrier>> {
+  //   let resource = context.move_resource_from(&ap, struct_ty)?;
+  //   let size = resource.size();
+  //   self.operand_stack.push(resource)?;
+  //   Ok(size)
+  // }
 
   /// MoveTo opcode.
-  fn move_to(
-    resource: SymStruct<'ctx>,
-  ) -> impl FnOnce(
-    &mut Interpreter,
-    &mut dyn InterpreterContext,
-    AccessPath,
-    &FatStructType,
-  ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-    |_interpreter, context, ap, struct_ty| {
-      let size = resource.size();
-      context.move_resource_to(&ap, struct_ty, resource)?;
-      Ok(size)
-    }
-  }
+  // fn move_to(
+  //   resource: SymStruct<'ctx>,
+  // ) -> impl FnOnce(
+  //   &mut Interpreter,
+  //   &mut dyn InterpreterContext,
+  //   AccessPath,
+  //   &FatStructType,
+  // ) -> VMResult<AbstractMemorySize<GasCarrier>> {
+  //   |_interpreter, context, ap, struct_ty| {
+  //     let size = resource.size();
+  //     context.move_resource_to(&ap, struct_ty, resource)?;
+  //     Ok(size)
+  //   }
+  // }
 
   /// MoveToSender opcode.
-  fn move_to_sender(
-    &mut self,
-    context: &mut dyn InterpreterContext,
-    ap: AccessPath,
-    struct_ty: &FatStructType,
-  ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-    let resource = self.operand_stack.pop_as::<SymStruct>()?;
-    let size = resource.size();
-    context.move_resource_to(&ap, struct_ty, resource)?;
-    Ok(size)
-  }
+  // fn move_to_sender(
+  //   &mut self,
+  //   context: &mut dyn InterpreterContext,
+  //   ap: AccessPath,
+  //   struct_ty: &FatStructType,
+  // ) -> VMResult<AbstractMemorySize<GasCarrier>> {
+  //   let resource = self.operand_stack.pop_as::<SymStruct>()?;
+  //   let size = resource.size();
+  //   context.move_resource_to(&ap, struct_ty, resource)?;
+  //   Ok(size)
+  // }
 
   //
   // Debugging and logging helpers.
@@ -435,92 +530,92 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
     err
   }
 
-  #[allow(dead_code)]
-  fn debug_print_frame<B: Write>(
-    &self,
-    buf: &mut B,
-    resolver: &Resolver,
-    idx: usize,
-    frame: &SymFrame,
-  ) -> VMResult<()> {
-    // Print out the function name with type arguments.
-    let func = &frame.function;
+  // #[allow(dead_code)]
+  // fn debug_print_frame<B: Write>(
+  //   &self,
+  //   buf: &mut B,
+  //   resolver: &Resolver,
+  //   idx: usize,
+  //   frame: &SymFrame,
+  // ) -> VMResult<()> {
+  //   // Print out the function name with type arguments.
+  //   let func = &frame.function;
 
-    debug_write!(buf, "    [{}] ", idx)?;
-    if let Some(module) = func.module_id() {
-      debug_write!(buf, "{}::{}::", module.address(), module.name(),)?;
-    }
-    debug_write!(buf, "{}", func.name())?;
-    let ty_args = frame.ty_args();
-    let mut fat_ty_args = vec![];
-    for ty in ty_args {
-      fat_ty_args.push(resolver.type_to_fat_type(ty)?);
-    }
-    if !fat_ty_args.is_empty() {
-      debug_write!(buf, "<")?;
-      let mut it = fat_ty_args.iter();
-      if let Some(ty) = it.next() {
-        ty.debug_print(buf)?;
-        for ty in it {
-          debug_write!(buf, ", ")?;
-          ty.debug_print(buf)?;
-        }
-      }
-      debug_write!(buf, ">")?;
-    }
-    debug_writeln!(buf)?;
+  //   debug_write!(buf, "    [{}] ", idx)?;
+  //   if let Some(module) = func.module_id() {
+  //     debug_write!(buf, "{}::{}::", module.address(), module.name(),)?;
+  //   }
+  //   debug_write!(buf, "{}", func.name())?;
+  //   let ty_args = frame.ty_args();
+  //   let mut fat_ty_args = vec![];
+  //   for ty in ty_args {
+  //     fat_ty_args.push(resolver.type_to_fat_type(ty)?);
+  //   }
+  //   if !fat_ty_args.is_empty() {
+  //     debug_write!(buf, "<")?;
+  //     let mut it = fat_ty_args.iter();
+  //     if let Some(ty) = it.next() {
+  //       ty.debug_print(buf)?;
+  //       for ty in it {
+  //         debug_write!(buf, ", ")?;
+  //         ty.debug_print(buf)?;
+  //       }
+  //     }
+  //     debug_write!(buf, ">")?;
+  //   }
+  //   debug_writeln!(buf)?;
 
-    // Print out the current instruction.
-    debug_writeln!(buf)?;
-    debug_writeln!(buf, "        Code:")?;
-    let pc = frame.pc as usize;
-    let code = func.code();
-    let before = if pc > 3 { pc - 3 } else { 0 };
-    let after = min(code.len(), pc + 4);
-    for (idx, instr) in code.iter().enumerate().take(pc).skip(before) {
-      debug_writeln!(buf, "            [{}] {:?}", idx, instr)?;
-    }
-    debug_writeln!(buf, "          > [{}] {:?}", pc, &code[pc])?;
-    for (idx, instr) in code.iter().enumerate().take(after).skip(pc + 1) {
-      debug_writeln!(buf, "            [{}] {:?}", idx, instr)?;
-    }
+  //   // Print out the current instruction.
+  //   debug_writeln!(buf)?;
+  //   debug_writeln!(buf, "        Code:")?;
+  //   let pc = frame.pc as usize;
+  //   let code = func.code();
+  //   let before = if pc > 3 { pc - 3 } else { 0 };
+  //   let after = min(code.len(), pc + 4);
+  //   for (idx, instr) in code.iter().enumerate().take(pc).skip(before) {
+  //     debug_writeln!(buf, "            [{}] {:?}", idx, instr)?;
+  //   }
+  //   debug_writeln!(buf, "          > [{}] {:?}", pc, &code[pc])?;
+  //   for (idx, instr) in code.iter().enumerate().take(after).skip(pc + 1) {
+  //     debug_writeln!(buf, "            [{}] {:?}", idx, instr)?;
+  //   }
 
-    // Print out the locals.
-    debug_writeln!(buf)?;
-    debug_writeln!(buf, "        SymLocals:")?;
-    if func.local_count() > 0 {
-      let mut tys = vec![];
-      for local in &func.locals().0 {
-        tys.push(resolver.make_fat_type(local, ty_args)?);
-      }
-      values::debug::print_locals(buf, &tys, &frame.locals)?;
-      debug_writeln!(buf)?;
-    } else {
-      debug_writeln!(buf, "            (none)")?;
-    }
+  //   // Print out the locals.
+  //   debug_writeln!(buf)?;
+  //   debug_writeln!(buf, "        SymLocals:")?;
+  //   if func.local_count() > 0 {
+  //     let mut tys = vec![];
+  //     for local in &func.locals().0 {
+  //       tys.push(resolver.make_fat_type(local, ty_args)?);
+  //     }
+  //     values::debug::print_locals(buf, &tys, &frame.locals)?;
+  //     debug_writeln!(buf)?;
+  //   } else {
+  //     debug_writeln!(buf, "            (none)")?;
+  //   }
 
-    debug_writeln!(buf)?;
-    Ok(())
-  }
+  //   debug_writeln!(buf)?;
+  //   Ok(())
+  // }
 
-  #[allow(dead_code)]
-  pub(crate) fn debug_print_stack_trace<B: Write>(
-    &self,
-    buf: &mut B,
-    resolver: &Resolver,
-  ) -> VMResult<()> {
-    debug_writeln!(buf, "Call Stack:")?;
-    for (i, frame) in self.call_stack.0.iter().enumerate() {
-      self.debug_print_frame(buf, resolver, i, frame)?;
-    }
-    debug_writeln!(buf, "Operand Stack:")?;
-    for (idx, val) in self.operand_stack.0.iter().enumerate() {
-      // TODO: Currently we do not know the types of the values on the operand stack.
-      // Revisit.
-      debug_writeln!(buf, "    [{}] {}", idx, val)?;
-    }
-    Ok(())
-  }
+  // #[allow(dead_code)]
+  // pub(crate) fn debug_print_stack_trace<B: Write>(
+  //   &self,
+  //   buf: &mut B,
+  //   resolver: &Resolver,
+  // ) -> VMResult<()> {
+  //   debug_writeln!(buf, "Call Stack:")?;
+  //   for (i, frame) in self.call_stack.0.iter().enumerate() {
+  //     self.debug_print_frame(buf, resolver, i, frame)?;
+  //   }
+  //   debug_writeln!(buf, "Operand Stack:")?;
+  //   for (idx, val) in self.operand_stack.0.iter().enumerate() {
+  //     // TODO: Currently we do not know the types of the values on the operand stack.
+  //     // Revisit.
+  //     debug_writeln!(buf, "    [{}] {}", idx, val)?;
+  //   }
+  //   Ok(())
+  // }
 
   /// Generate a string which is the status of the interpreter: call stack, current bytecode
   /// stream, locals and operand stack.
@@ -655,7 +750,7 @@ struct SymFrame<'ctx> {
   pc: u16,
   locals: SymLocals<'ctx>,
   function: Arc<Function>,
-  ty_args: Vec<Type>,
+  // ty_args: Vec<Type>,
 }
 
 /// An `ExitCode` from `execute_code_unit`.
@@ -673,12 +768,16 @@ impl<'ctx> SymFrame<'ctx> {
   /// Create a new `SymFrame` given a `Function` and the function `SymLocals`.
   ///
   /// The locals must be loaded before calling this.
-  fn new(function: Arc<Function>, ty_args: Vec<Type>, locals: SymLocals<'ctx>) -> Self {
+  fn new(
+    function: Arc<Function>,
+    // ty_args: Vec<Type>,
+    locals: SymLocals<'ctx>
+  ) -> Self {
     SymFrame {
       pc: 0,
       locals,
       function,
-      ty_args,
+      // ty_args,
     }
   }
 
@@ -687,9 +786,9 @@ impl<'ctx> SymFrame<'ctx> {
     &mut self,
     solver: &'ctx Solver<'ctx>,
     resolver: &Resolver,
-    interpreter: &mut Interpreter,
+    interpreter: &mut Interpreter<'_, 'ctx>,
     context: &mut dyn InterpreterContext,
-  ) -> VMResult<ExitCode> {
+  ) -> VMResult<ExitCode<'ctx>> {
     let code = self.function.code();
     loop {
       for instruction in &code[self.pc as usize..] {
@@ -739,22 +838,22 @@ impl<'ctx> SymFrame<'ctx> {
             interpreter.operand_stack.push(SymValue::from_u128(solver, *int_const))?;
           }
           // !!!
-          Bytecode::LdConst(idx) => {
-            let constant = resolver.constant_at(*idx);
-            // gas!(
-            //   instr: context,
-            //   interpreter,
-            //   Opcodes::LD_CONST,
-            //   AbstractMemorySize::new(constant.data.len() as GasCarrier)
-            // )?;
-            interpreter
-              .operand_stack
-              .push(SymValue::deserialize_constant(constant).ok_or_else(|| {
-                VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
-                  "Verifier failed to verify the deserialization of constants".to_owned(),
-                )
-              })?)?
-          }
+          // Bytecode::LdConst(idx) => {
+          //   let constant = resolver.constant_at(*idx);
+          //   // gas!(
+          //   //   instr: context,
+          //   //   interpreter,
+          //   //   Opcodes::LD_CONST,
+          //   //   AbstractMemorySize::new(constant.data.len() as GasCarrier)
+          //   // )?;
+          //   interpreter
+          //     .operand_stack
+          //     .push(SymValue::deserialize_constant(constant).ok_or_else(|| {
+          //       VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
+          //         "Verifier failed to verify the deserialization of constants".to_owned(),
+          //       )
+          //     })?)?
+          // }
           Bytecode::LdTrue => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_TRUE)?;
             interpreter.operand_stack.push(SymValue::from_bool(solver, true))?;
@@ -786,9 +885,9 @@ impl<'ctx> SymFrame<'ctx> {
           Bytecode::Call(idx) => {
             return Ok(ExitCode::Call(*idx));
           }
-          Bytecode::CallGeneric(idx) => {
-            return Ok(ExitCode::CallGeneric(*idx));
-          }
+          // Bytecode::CallGeneric(idx) => {
+          //   return Ok(ExitCode::CallGeneric(idx));
+          // }
           Bytecode::MutBorrowLoc(idx) | Bytecode::ImmBorrowLoc(idx) => {
             // let opcode = match instruction {
             //   Bytecode::MutBorrowLoc(_) => Opcodes::MUT_BORROW_LOC,
@@ -811,18 +910,18 @@ impl<'ctx> SymFrame<'ctx> {
             let field_ref = reference.borrow_field(offset)?;
             interpreter.operand_stack.push(field_ref)?;
           }
-          Bytecode::ImmBorrowFieldGeneric(fi_idx) | Bytecode::MutBorrowFieldGeneric(fi_idx) => {
-            // let opcode = match instruction {
-            //   Bytecode::MutBorrowField(_) => Opcodes::MUT_BORROW_FIELD_GENERIC,
-            //   _ => Opcodes::IMM_BORROW_FIELD_GENERIC,
-            // };
-            // gas!(const_instr: context, interpreter, opcode)?;
+          // Bytecode::ImmBorrowFieldGeneric(fi_idx) | Bytecode::MutBorrowFieldGeneric(fi_idx) => {
+          //   // let opcode = match instruction {
+          //   //   Bytecode::MutBorrowField(_) => Opcodes::MUT_BORROW_FIELD_GENERIC,
+          //   //   _ => Opcodes::IMM_BORROW_FIELD_GENERIC,
+          //   // };
+          //   // gas!(const_instr: context, interpreter, opcode)?;
 
-            let reference = interpreter.operand_stack.pop_as::<SymStructRef>()?;
-            let offset = resolver.field_instantiation_offset(*fi_idx);
-            let field_ref = reference.borrow_field(offset)?;
-            interpreter.operand_stack.push(field_ref)?;
-          }
+          //   let reference = interpreter.operand_stack.pop_as::<SymStructRef>()?;
+          //   let offset = resolver.field_instantiation_offset(*fi_idx);
+          //   let field_ref = reference.borrow_field(offset)?;
+          //   interpreter.operand_stack.push(field_ref)?;
+          // }
           Bytecode::Pack(sd_idx) => {
             let field_count = resolver.field_count(*sd_idx);
             let args = interpreter.operand_stack.popn(field_count)?;
@@ -835,18 +934,18 @@ impl<'ctx> SymFrame<'ctx> {
               .operand_stack
               .push(SymValue::from_sym_struct(SymStruct::pack(solver, args)))?;
           }
-          Bytecode::PackGeneric(si_idx) => {
-            let field_count = resolver.field_instantiation_count(*si_idx);
-            let args = interpreter.operand_stack.popn(field_count)?;
-            // let size = args.iter().fold(
-            //   AbstractMemorySize::new(GasCarrier::from(field_count)),
-            //   |acc, v| acc.add(v.size()),
-            // );
-            // gas!(instr: context, interpreter, Opcodes::PACK, size)?;
-            interpreter
-              .operand_stack
-              .push(SymValue::from_sym_struct(SymStruct::pack(solver, args)))?;
-          }
+          // Bytecode::PackGeneric(si_idx) => {
+          //   let field_count = resolver.field_instantiation_count(*si_idx);
+          //   let args = interpreter.operand_stack.popn(field_count)?;
+          //   // let size = args.iter().fold(
+          //   //   AbstractMemorySize::new(GasCarrier::from(field_count)),
+          //   //   |acc, v| acc.add(v.size()),
+          //   // );
+          //   // gas!(instr: context, interpreter, Opcodes::PACK, size)?;
+          //   interpreter
+          //     .operand_stack
+          //     .push(SymValue::from_sym_struct(SymStruct::pack(solver, args)))?;
+          // }
           Bytecode::Unpack(sd_idx) => {
             // let field_count = resolver.field_count(*sd_idx);
             let struct_ = interpreter.operand_stack.pop_as::<SymStruct>()?;
@@ -864,28 +963,28 @@ impl<'ctx> SymFrame<'ctx> {
               interpreter.operand_stack.push(value)?;
             }
           }
-          Bytecode::UnpackGeneric(si_idx) => {
-            // let field_count = resolver.field_instantiation_count(*si_idx);
-            let struct_ = interpreter.operand_stack.pop_as::<SymStruct>()?;
-            // gas!(
-            //   instr: context,
-            //   interpreter,
-            //   Opcodes::UNPACK_GENERIC,
-            //   AbstractMemorySize::new(GasCarrier::from(field_count))
-            // )?;
-            // TODO: Whether or not we want this gas metering in the loop is
-            // questionable.  However, if we don't have it in the loop we could wind up
-            // doing a fair bit of work before charging for it.
-            for value in struct_.unpack()? {
-              // gas!(
-              //   instr: context,
-              //   interpreter,
-              //   Opcodes::UNPACK_GENERIC,
-              //   value.size()
-              // )?;
-              interpreter.operand_stack.push(value)?;
-            }
-          }
+          // Bytecode::UnpackGeneric(si_idx) => {
+          //   // let field_count = resolver.field_instantiation_count(*si_idx);
+          //   let struct_ = interpreter.operand_stack.pop_as::<SymStruct>()?;
+          //   // gas!(
+          //   //   instr: context,
+          //   //   interpreter,
+          //   //   Opcodes::UNPACK_GENERIC,
+          //   //   AbstractMemorySize::new(GasCarrier::from(field_count))
+          //   // )?;
+          //   // TODO: Whether or not we want this gas metering in the loop is
+          //   // questionable.  However, if we don't have it in the loop we could wind up
+          //   // doing a fair bit of work before charging for it.
+          //   for value in struct_.unpack()? {
+          //     // gas!(
+          //     //   instr: context,
+          //     //   interpreter,
+          //     //   Opcodes::UNPACK_GENERIC,
+          //     //   value.size()
+          //     // )?;
+          //     interpreter.operand_stack.push(value)?;
+          //   }
+          // }
           Bytecode::ReadRef => {
             let reference = interpreter.operand_stack.pop_as::<SymReference>()?;
             let value = reference.read_ref()?;
@@ -1001,15 +1100,26 @@ impl<'ctx> SymFrame<'ctx> {
             // gas!(const_instr: context, interpreter, Opcodes::ABORT)?;
             let sym_error_code = interpreter.operand_stack.pop_as::<SymU64>()?;
             let error_code = sym_error_code.as_inner().as_u64();
-            return Err(
-              VMStatus::new(StatusCode::ABORTED)
-                .with_sub_status(error_code)
-                .with_message(format!(
-                  "{} at offset {}",
+            return match error_code {
+              Some(code) => Err(
+                VMStatus::new(StatusCode::ABORTED)
+                  .with_sub_status(code)
+                  .with_message(format!(
+                    "{} at offset {}",
+                    self.function.pretty_string(),
+                    self.pc,
+                  )),
+              ),
+              None => {
+                let msg = format!(
+                  "With Symbolic Error Code {:?}, {} at offset {}",
+                  error_code,
                   self.function.pretty_string(),
                   self.pc,
-                )),
-            );
+                );
+                Err(VMStatus::new(StatusCode::ABORTED).with_message(msg))
+              }
+            };
           }
           Bytecode::Eq => {
             let lhs = interpreter.operand_stack.pop()?;
@@ -1215,9 +1325,9 @@ impl<'ctx> SymFrame<'ctx> {
     }
   }
 
-  fn ty_args(&self) -> &[Type] {
-    &self.ty_args
-  }
+  // fn ty_args(&self) -> &[Type] {
+  //   &self.ty_args
+  // }
 
   fn resolver<'a>(&self, loader: &'a Loader) -> Resolver<'a> {
     self.function.get_resolver(loader)

@@ -1,19 +1,19 @@
 use libra_types::{
-  identifier::IdentStr,
   transaction::Module,
 };
+use move_core_types::identifier::IdentStr;
 use vm::{
   CompiledModule,
 };
 
 use std::{
-  fs::File,
+  fs,
   io::BufReader,
   path::{Path, PathBuf},
 };
 use structopt::StructOpt;
 
-mod engine;
+extern crate engine;
 use engine::Engine;
 
 #[derive(Debug, StructOpt)]
@@ -25,11 +25,14 @@ struct Args {
 }
 
 fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> CompiledModule {
-  let bytecode_file = File::open(bytecode_path).expect("Failed to open bytecode file");
-  let bytecode_reader = BufReader::new(bytecode_file);
-  let bytecode_json: Module = serde_json::from_reader(bytecode_reader)
-    .expect("Failed to parse json format. File may be corrupted.");
-  CompiledModule::deserialize(&bytecode_json.code())
+  // let bytecode_file = File::open(bytecode_path).expect("Failed to open bytecode file");
+  // let bytecode_reader = BufReader::new(bytecode_file);
+  // let bytecode_json: Module = serde_json::from_reader(bytecode_reader)
+  //   .expect("Failed to parse json format. File may be corrupted.");
+  // CompiledModule::deserialize(&bytecode_json.code())
+  //   .expect("Failed to read bytecode. File may be corrupted.")
+  let module_bytes = fs::read(bytecode_path).expect("Failed to open bytecode file");
+  CompiledModule::deserialize(module_bytes.as_slice())
     .expect("Failed to read bytecode. File may be corrupted.")
 }
 

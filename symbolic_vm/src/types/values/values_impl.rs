@@ -5,33 +5,38 @@
 // };
 use libra_types::{
   account_address::AccountAddress,
-  vm_error::{sub_status::NFE_VECTOR_ERROR_BASE, StatusCode, VMStatus},
+  vm_error::{
+    // sub_status::NFE_VECTOR_ERROR_BASE,
+    StatusCode,
+    VMStatus
+  },
 };
-use move_core_types::gas_schedule::{
-  words_in, AbstractMemorySize, GasAlgebra, GasCarrier, CONST_SIZE, REFERENCE_SIZE, STRUCT_SIZE,
-};
+// use move_core_types::gas_schedule::{
+//   words_in, AbstractMemorySize, GasAlgebra, GasCarrier, CONST_SIZE, REFERENCE_SIZE, STRUCT_SIZE,
+// };
 use std::{
   cell::{Ref, RefCell, RefMut},
   // collections::VecDeque,
   fmt::{self, Debug, Display},
   iter,
   // mem::size_of,
-  ops::Add,
+  // ops::Add,
   rc::Rc,
 };
 use vm::{
   errors::*,
-  file_format::{Constant, SignatureToken},
+  file_format::{
+    //Constant,
+    SignatureToken
+  },
 };
 
 use z3::ast::Dynamic;
 
-use crate::{
-  engine::solver::Solver,
-  symbolic_vm::types::values::{
-    account_address::SymAccountAddress,
-    primitives::{SymBool, SymU128, SymU64, SymU8},
-  }
+use solver::Solver;
+use crate::types::values::{
+  account_address::SymAccountAddress,
+  primitives::{SymBool, SymU128, SymU64, SymU8},
 };
 
 /***************************************************************************************
@@ -351,13 +356,13 @@ impl<'ctx> SymValueImpl<'ctx> {
     match self {
       Invalid => Invalid,
 
-      U8(x) => U8(*x),
-      U64(x) => U64(*x),
-      U128(x) => U128(*x),
-      Bool(x) => Bool(*x),
-      Address(x) => Address(*x),
+      U8(x) => U8(x.clone()),
+      U64(x) => U64(x.clone()),
+      U128(x) => U128(x.clone()),
+      Bool(x) => Bool(x.clone()),
+      Address(x) => Address(x.clone()),
       // TODO copying resource?
-      Signer(x) => Signer(*x),
+      Signer(x) => Signer(x.clone()),
 
       ContainerRef(r) => ContainerRef(r.copy_value()),
       IndexedRef(r) => IndexedRef(r.copy_value()),
@@ -605,10 +610,10 @@ impl<'ctx> SymIndexedRef<'ctx> {
 
     let res = match &(*self.container_ref.borrow()).container {
       General(v) => v[self.idx].copy_value(),
-      U8(v) => SymValueImpl::U8(v[self.idx]),
-      U64(v) => SymValueImpl::U64(v[self.idx]),
-      U128(v) => SymValueImpl::U128(v[self.idx]),
-      Bool(v) => SymValueImpl::Bool(v[self.idx]),
+      U8(v) => SymValueImpl::U8(v[self.idx].clone()),
+      U64(v) => SymValueImpl::U64(v[self.idx].clone()),
+      U128(v) => SymValueImpl::U128(v[self.idx].clone()),
+      Bool(v) => SymValueImpl::Bool(v[self.idx].clone()),
     };
 
     Ok(SymValue(res))
@@ -915,7 +920,7 @@ impl<'ctx> SymLocals<'ctx> {
 *
 **************************************************************************************/
 impl<'ctx> SymValue<'ctx> {
-  pub fn from_u8(solver: &Solver<'ctx>, value: u8) -> Self {
+  pub fn from_u8(solver: &'ctx Solver<'ctx>, value: u8) -> Self {
     SymValue(SymValueImpl::U8(SymU8::from(solver, value)))
   }
 
@@ -923,11 +928,11 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::U8(sym))
   }
 
-  pub fn new_u8(solver: &Solver<'ctx>, prefix: &str) -> Self {
+  pub fn new_u8(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
     SymValue(SymValueImpl::U8(SymU8::new(solver, prefix)))
   }
 
-  pub fn from_u64(solver: &Solver<'ctx>, value: u64) -> Self {
+  pub fn from_u64(solver: &'ctx Solver<'ctx>, value: u64) -> Self {
     SymValue(SymValueImpl::U64(SymU64::from(solver, value)))
   }
 
@@ -935,11 +940,11 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::U64(sym))
   }
 
-  pub fn new_u64(solver: &Solver<'ctx>, prefix: &str) -> Self {
+  pub fn new_u64(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
     SymValue(SymValueImpl::U64(SymU64::new(solver, prefix)))
   }
 
-  pub fn from_u128(solver: &Solver<'ctx>, value: u128) -> Self {
+  pub fn from_u128(solver: &'ctx Solver<'ctx>, value: u128) -> Self {
     SymValue(SymValueImpl::U128(SymU128::from(solver, value)))
   }
 
@@ -947,11 +952,11 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::U128(sym))
   }
 
-  pub fn new_u128(solver: &Solver<'ctx>, prefix: &str) -> Self {
+  pub fn new_u128(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
     SymValue(SymValueImpl::U128(SymU128::new(solver, prefix)))
   }
 
-  pub fn from_bool(solver: &Solver<'ctx>, value: bool) -> Self {
+  pub fn from_bool(solver: &'ctx Solver<'ctx>, value: bool) -> Self {
     SymValue(SymValueImpl::Bool(SymBool::from(solver, value)))
   }
 
@@ -959,7 +964,7 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::Bool(sym))
   }
 
-  pub fn new_bool(solver: &Solver<'ctx>, prefix: &str) -> Self {
+  pub fn new_bool(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
     SymValue(SymValueImpl::Bool(SymBool::new(solver, prefix)))
   }
 
@@ -1109,10 +1114,10 @@ impl<'ctx> VMValueCast<Vec<SymValue<'ctx>>> for SymValue<'ctx> {
     match self.0 {
       SymValueImpl::Container(r) => Ok(match take_unique_ownership(r)?.container {
         SymContainerImpl::General(vs) => vs.into_iter().map(SymValue).collect(),
-        SymContainerImpl::U8(vs) => vs.into_iter().map(SymValue::u8).collect(),
-        SymContainerImpl::U64(vs) => vs.into_iter().map(SymValue::u64).collect(),
-        SymContainerImpl::U128(vs) => vs.into_iter().map(SymValue::u128).collect(),
-        SymContainerImpl::Bool(vs) => vs.into_iter().map(SymValue::bool).collect(),
+        SymContainerImpl::U8(vs) => vs.into_iter().map(SymValue::from_sym_u8).collect(),
+        SymContainerImpl::U64(vs) => vs.into_iter().map(SymValue::from_sym_u64).collect(),
+        SymContainerImpl::U128(vs) => vs.into_iter().map(SymValue::from_sym_u128).collect(),
+        SymContainerImpl::Bool(vs) => vs.into_iter().map(SymValue::from_sym_bool).collect(),
       }),
       v => Err(
         VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR)
@@ -2043,12 +2048,13 @@ impl<'ctx> Display for SymIndexedRef<'ctx> {
 
 impl<'ctx> Display for SymContainer<'ctx> {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    use SymContainerImpl::*;
     match &self.container {
-      Self::General(v) => display_list_of_items(v, f),
-      Self::U8(v) => display_list_of_items(v, f),
-      Self::U64(v) => display_list_of_items(v, f),
-      Self::U128(v) => display_list_of_items(v, f),
-      Self::Bool(v) => display_list_of_items(v, f),
+      General(v) => display_list_of_items(v, f),
+      U8(v) => display_list_of_items(v, f),
+      U64(v) => display_list_of_items(v, f),
+      U128(v) => display_list_of_items(v, f),
+      Bool(v) => display_list_of_items(v, f),
     }
   }
 }

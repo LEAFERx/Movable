@@ -6,11 +6,9 @@ use libra_types::{
   vm_error::{StatusCode, VMStatus},
 };
 
-use crate::{
-  engine::solver::Solver,
-  symbolic_vm::types::values::{
-    primitives::SymBool,
-  },
+use solver::Solver;
+use crate::types::values::{
+  primitives::SymBool,
 };
 
 #[derive(Debug, Clone)]

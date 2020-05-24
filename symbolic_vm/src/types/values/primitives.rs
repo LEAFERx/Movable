@@ -6,7 +6,7 @@ use z3::ast::{Ast, Bool, Dynamic, BV};
 
 use std::fmt;
 
-use crate::{engine::solver::Solver};
+use solver::Solver;
 
 #[derive(Debug, Clone)]
 pub struct SymU8<'ctx>(BV<'ctx>);
@@ -20,7 +20,7 @@ pub struct SymBool<'ctx>(Bool<'ctx>);
 // Consider to use a macro to do impl
 
 impl<'ctx> SymU8<'ctx> {
-  pub fn from(solver: &Solver<'ctx>, value: u8) -> Self {
+  pub fn from(solver: &'ctx Solver<'ctx>, value: u8) -> Self {
     SymU8(BV::from_u64(solver.ctx(), value as u64, 8))
   }
 
@@ -30,7 +30,7 @@ impl<'ctx> SymU8<'ctx> {
     SymU8(ast)
   }
 
-  pub fn new(solver: &Solver<'ctx>, prefix: &str) -> Self {
+  pub fn new(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
     SymU8(BV::fresh_const(solver.ctx(), prefix, 8))
   }
 
@@ -113,7 +113,7 @@ impl<'ctx> SymU8<'ctx> {
 }
 
 impl<'ctx> SymU64<'ctx> {
-  pub fn from(solver: &Solver<'ctx>, value: u64) -> Self {
+  pub fn from(solver: &'ctx Solver<'ctx>, value: u64) -> Self {
     SymU64(BV::from_u64(solver.ctx(), value, 64))
   }
 
@@ -123,7 +123,7 @@ impl<'ctx> SymU64<'ctx> {
     SymU64(ast)
   }
 
-  pub fn new(solver: &Solver<'ctx>, prefix: &str) -> Self {
+  pub fn new(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
     SymU64(BV::fresh_const(solver.ctx(), prefix, 64))
   }
 
@@ -205,7 +205,7 @@ impl<'ctx> SymU64<'ctx> {
 }
 
 impl<'ctx> SymU128<'ctx> {
-  pub fn from(solver: &Solver<'ctx>, value: u128) -> Self {
+  pub fn from(solver: &'ctx Solver<'ctx>, value: u128) -> Self {
     let ctx = solver.ctx();
     let x =
       BV::from_u64(ctx, (value >> 64) as u64, 64).concat(&BV::from_u64(ctx, value as u64, 64));
@@ -218,7 +218,7 @@ impl<'ctx> SymU128<'ctx> {
     SymU128(ast)
   }
 
-  pub fn new(solver: &Solver<'ctx>, prefix: &str) -> Self {
+  pub fn new(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
     SymU128(BV::fresh_const(solver.ctx(), prefix, 128))
   }
 
@@ -300,7 +300,7 @@ impl<'ctx> SymU128<'ctx> {
 }
 
 impl<'ctx> SymBool<'ctx> {
-  pub fn from(solver: &Solver<'ctx>, value: bool) -> Self {
+  pub fn from(solver: &'ctx Solver<'ctx>, value: bool) -> Self {
     SymBool(Bool::from_bool(solver.ctx(), value))
   }
 
@@ -308,7 +308,7 @@ impl<'ctx> SymBool<'ctx> {
     SymBool(ast)
   }
 
-  pub fn new(solver: &Solver<'ctx>, prefix: &str) -> Self {
+  pub fn new(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
     SymBool(Bool::fresh_const(solver.ctx(), prefix))
   }
 
