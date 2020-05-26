@@ -18,14 +18,18 @@ use libra_types::{
 use move_core_types::gas_schedule::{AbstractMemorySize, CostTable, /* GasAlgebra, */ GasCarrier};
 use move_vm_types::{
   // gas_schedule::calculate_intrinsic_gas,
-  interpreter_context::InterpreterContext,
   loaded_data::{runtime_types::Type, types::FatStructType},
   transaction_metadata::TransactionMetadata,
   // values::{self, SymIntegerValue, SymLocals, SymReference, Struct, StructRef, VMValueCast, SymValue},
 };
-use crate::types::values::{
-  SymU8, SymU64, /* SymU128, */ SymBool,
-  SymIntegerValue, SymLocals, SymReference, SymStruct, SymStructRef, SymValue, VMValueCast,
+use crate::{
+  types::{
+    values::{
+      SymU8, SymU64, /* SymU128, */ SymBool, SymAccountAddress,
+      SymIntegerValue, SymLocals, SymReference, SymStruct, SymStructRef, SymValue, VMValueCast,
+    },
+    interpreter_context::SymInterpreterContext,
+  },
 };
 
 use z3::{SatResult};
@@ -76,26 +80,25 @@ use solver::Solver;
 /// The `Interpreter` receives a reference to a data store used by certain opcodes
 /// to do operations on data on chain and a `TransactionMetadata` which is also used to resolve
 /// specific opcodes.
-pub(crate) struct Interpreter<'vtxn, 'ctx> {
+pub(crate) struct SymInterpreter<'vtxn, 'ctx> {
   /// Operand stack, where Move `SymValue`s are stored for stack operations.
   operand_stack: SymStack<'ctx>,
   /// The stack of active functions.
   call_stack: SymCallStack<'ctx>,
   /// Transaction data to resolve special bytecodes (e.g. GetTxnSequenceNumber, GetTxnPublicKey,
   /// GetTxnSenderAddress, ...)
-  // txn_data: &'vtxn TransactionMetadata,
+  txn_data: &'vtxn TransactionMetadata,
   // gas_schedule: &'vtxn CostTable,
-  phatom: PhantomData<&'vtxn CostTable>,
 }
 
-impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
+impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// Entrypoint into the interpreter. All external calls need to be routed through this
   /// function.
   pub(crate) fn entrypoint(
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
     loader: &Loader,
-    // txn_data: &'vtxn TransactionMetadata,
+    txn_data: &'vtxn TransactionMetadata,
     // gas_schedule: &'vtxn CostTable,
     function: Arc<Function>,
     // ty_args: Vec<Type>,
@@ -112,7 +115,7 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
     // We count the intrinsic cost of the transaction here, since that needs to also cover the
     // setup of the function.
     // let mut interp = Self::new(txn_data, gas_schedule);
-    let mut interp = Self::new();
+    let mut interp = Self::new(txn_data);
     // gas!(
     //   consume: context,
     //   calculate_intrinsic_gas(txn_size, &gas_schedule.gas_constants)
@@ -130,15 +133,14 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
   /// Create a new instance of an `Interpreter` in the context of a transaction with a
   /// given module cache and gas schedule.
   fn new(
-    // txn_data: &'vtxn TransactionMetadata,
+    txn_data: &'vtxn TransactionMetadata,
     // gas_schedule: &'vtxn CostTable
   ) -> Self {
-    Interpreter {
+    SymInterpreter {
       operand_stack: SymStack::new(),
       call_stack: SymCallStack::new(),
-      phatom: PhantomData,
       // gas_schedule,
-      // txn_data,
+      txn_data,
     }
   }
 
@@ -158,7 +160,7 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
     &mut self,
     solver: &'ctx Solver<'ctx>,
     loader: &Loader,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
     function: Arc<Function>,
     // ty_args: Vec<Type>,
     args: Vec<SymValue<'ctx>>,
@@ -318,7 +320,7 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
   // fn call_native(
   //   &mut self,
   //   resolver: &Resolver,
-  //   context: &mut dyn InterpreterContext,
+  //   context: &mut dyn SymInterpreterContext,
   //   function: Arc<Function>,
   //   ty_args: Vec<Type>,
   // ) -> VMResult<()> {
@@ -380,8 +382,9 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
   /// opcode.
   fn global_data_op<F>(
     &mut self,
+    solver: &'ctx Solver<'ctx>,
     resolver: &Resolver,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
     address: AccountAddress,
     idx: StructDefinitionIndex,
     op: F,
@@ -389,7 +392,8 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
   where
     F: FnOnce(
       &mut Self,
-      &mut dyn InterpreterContext,
+      &'ctx Solver<'ctx>,
+      &mut dyn SymInterpreterContext,
       AccessPath,
       &FatStructType,
     ) -> VMResult<AbstractMemorySize<GasCarrier>>,
@@ -402,13 +406,13 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
       context,
     )?;
     let ap = AccessPath::new(address, libra_type.resource_key().to_vec());
-    op(self, context, ap, libra_type.fat_type())
+    op(self, solver, context, ap, libra_type.fat_type())
   }
 
   // fn global_data_op_generic<F>(
   //   &mut self,
   //   resolver: &Resolver,
-  //   context: &mut dyn InterpreterContext,
+  //   context: &mut dyn SymInterpreterContext,
   //   address: AccountAddress,
   //   idx: StructDefInstantiationIndex,
   //   frame: &SymFrame,
@@ -417,7 +421,7 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
   // where
   //   F: FnOnce(
   //     &mut Self,
-  //     &mut dyn InterpreterContext,
+  //     &mut dyn SymInterpreterContext,
   //     AccessPath,
   //     &FatStructType,
   //   ) -> VMResult<AbstractMemorySize<GasCarrier>>,
@@ -439,72 +443,76 @@ impl<'vtxn, 'ctx> Interpreter<'vtxn, 'ctx> {
   // }
 
   /// BorrowGlobal (mutable and not) opcode.
-  // fn borrow_global(
-  //   &mut self,
-  //   context: &mut dyn InterpreterContext,
-  //   ap: AccessPath,
-  //   struct_ty: &FatStructType,
-  // ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-  //   let g = context.borrow_global(&ap, struct_ty)?;
-  //   let size = g.size();
-  //   self.operand_stack.push(g.borrow_global()?)?;
-  //   Ok(size)
-  // }
+  fn borrow_global(
+    &mut self,
+    solver: &'ctx Solver<'ctx>,
+    context: &mut dyn SymInterpreterContext,
+    ap: AccessPath,
+    struct_ty: &FatStructType,
+  ) -> VMResult<AbstractMemorySize<GasCarrier>> {
+    let g = context.borrow_global(solver, &ap, struct_ty)?;
+    let size = g.size();
+    self.operand_stack.push(g.borrow_global()?)?;
+    Ok(size)
+  }
 
   /// Exists opcode.
   fn exists(
     &mut self,
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
     ap: AccessPath,
     struct_ty: &FatStructType,
   ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-    let (exists, mem_size) = context.resource_exists(&ap, struct_ty)?;
+    let (exists, mem_size) = context.resource_exists(solver, &ap, struct_ty)?;
     self.operand_stack.push(SymValue::from_bool(solver, exists))?;
     Ok(mem_size)
   }
 
   /// MoveFrom opcode.
-  // fn move_from(
-  //   &mut self,
-  //   context: &mut dyn InterpreterContext,
-  //   ap: AccessPath,
-  //   struct_ty: &FatStructType,
-  // ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-  //   let resource = context.move_resource_from(&ap, struct_ty)?;
-  //   let size = resource.size();
-  //   self.operand_stack.push(resource)?;
-  //   Ok(size)
-  // }
+  fn move_from(
+    &mut self,
+    solver: &'ctx Solver<'ctx>,
+    context: &mut dyn SymInterpreterContext,
+    ap: AccessPath,
+    struct_ty: &FatStructType,
+  ) -> VMResult<AbstractMemorySize<GasCarrier>> {
+    let resource = context.move_resource_from(solver, &ap, struct_ty)?;
+    let size = resource.size();
+    self.operand_stack.push(resource)?;
+    Ok(size)
+  }
 
   /// MoveTo opcode.
-  // fn move_to(
-  //   resource: SymStruct<'ctx>,
-  // ) -> impl FnOnce(
-  //   &mut Interpreter,
-  //   &mut dyn InterpreterContext,
-  //   AccessPath,
-  //   &FatStructType,
-  // ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-  //   |_interpreter, context, ap, struct_ty| {
-  //     let size = resource.size();
-  //     context.move_resource_to(&ap, struct_ty, resource)?;
-  //     Ok(size)
-  //   }
-  // }
+  fn move_to(
+    resource: SymStruct<'ctx>,
+  ) -> impl FnOnce(
+    &mut SymInterpreter,
+    &'ctx Solver<'ctx>,
+    &mut dyn SymInterpreterContext,
+    AccessPath,
+    &FatStructType,
+  ) -> VMResult<AbstractMemorySize<GasCarrier>> {
+    |_interpreter, solver, context, ap, struct_ty| {
+      let size = resource.size();
+      context.move_resource_to(solver, &ap, struct_ty, resource)?;
+      Ok(size)
+    }
+  }
 
   /// MoveToSender opcode.
-  // fn move_to_sender(
-  //   &mut self,
-  //   context: &mut dyn InterpreterContext,
-  //   ap: AccessPath,
-  //   struct_ty: &FatStructType,
-  // ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-  //   let resource = self.operand_stack.pop_as::<SymStruct>()?;
-  //   let size = resource.size();
-  //   context.move_resource_to(&ap, struct_ty, resource)?;
-  //   Ok(size)
-  // }
+  fn move_to_sender(
+    &mut self,
+    solver: &'ctx Solver<'ctx>,
+    context: &mut dyn SymInterpreterContext,
+    ap: AccessPath,
+    struct_ty: &FatStructType,
+  ) -> VMResult<AbstractMemorySize<GasCarrier>> {
+    let resource = self.operand_stack.pop_as::<SymStruct>()?;
+    let size = resource.size();
+    context.move_resource_to(solver, &ap, struct_ty, resource)?;
+    Ok(size)
+  }
 
   //
   // Debugging and logging helpers.
@@ -786,8 +794,8 @@ impl<'ctx> SymFrame<'ctx> {
     &mut self,
     solver: &'ctx Solver<'ctx>,
     resolver: &Resolver,
-    interpreter: &mut Interpreter<'_, 'ctx>,
-    context: &mut dyn InterpreterContext,
+    interpreter: &mut SymInterpreter<'_, 'ctx>,
+    context: &mut dyn SymInterpreterContext,
   ) -> VMResult<ExitCode<'ctx>> {
     let code = self.function.code();
     loop {
@@ -946,7 +954,7 @@ impl<'ctx> SymFrame<'ctx> {
           //     .operand_stack
           //     .push(SymValue::from_sym_struct(SymStruct::pack(solver, args)))?;
           // }
-          Bytecode::Unpack(sd_idx) => {
+          Bytecode::Unpack(_sd_idx) => {
             // let field_count = resolver.field_count(*sd_idx);
             let struct_ = interpreter.operand_stack.pop_as::<SymStruct>()?;
             // gas!(
@@ -1147,28 +1155,29 @@ impl<'ctx> SymFrame<'ctx> {
               .operand_stack
               .push(SymValue::from_sym_bool(lhs.equals(&rhs)?.not()))?;
           }
-          // Bytecode::GetTxnSenderAddress => {
-          //   // gas!(const_instr: context, interpreter, Opcodes::GET_TXN_SENDER)?;
-          //   interpreter
-          //     .operand_stack
-          //     .push(SymValue::address(interpreter.txn_data.sender()))?;
-          // }
-          // Bytecode::MutBorrowGlobal(sd_idx) | Bytecode::ImmBorrowGlobal(sd_idx) => {
-          //   let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
-          //   let size = interpreter.global_data_op(
-          //     resolver,
-          //     context,
-          //     addr,
-          //     *sd_idx,
-          //     Interpreter::borrow_global,
-          //   )?;
-          //   // gas!(
-          //     instr: context,
-          //     interpreter,
-          //     Opcodes::MUT_BORROW_GLOBAL,
-          //     size
-          //   )?;
-          // }
+          Bytecode::GetTxnSenderAddress => {
+            // gas!(const_instr: context, interpreter, Opcodes::GET_TXN_SENDER)?;
+            interpreter
+              .operand_stack
+              .push(SymValue::from_address(solver, interpreter.txn_data.sender()))?;
+          }
+          Bytecode::MutBorrowGlobal(sd_idx) | Bytecode::ImmBorrowGlobal(sd_idx) => {
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
+            let size = interpreter.global_data_op(
+              solver,
+              resolver,
+              context,
+              addr,
+              *sd_idx,
+              SymInterpreter::borrow_global,
+            )?;
+            // gas!(
+            //   instr: context,
+            //   interpreter,
+            //   Opcodes::MUT_BORROW_GLOBAL,
+            //   size
+            // )?;
+          }
           // Bytecode::MutBorrowGlobalGeneric(si_idx) | Bytecode::ImmBorrowGlobalGeneric(si_idx) => {
           //   let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
           //   let size = interpreter.global_data_op_generic(
@@ -1186,12 +1195,12 @@ impl<'ctx> SymFrame<'ctx> {
           //     size
           //   )?;
           // }
-          // Bytecode::Exists(sd_idx) => {
-          //   let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
-          //   let size =
-          //     interpreter.global_data_op(resolver, context, addr, *sd_idx, Interpreter::exists)?;
-          //   // gas!(instr: context, interpreter, Opcodes::EXISTS, size)?;
-          // }
+          Bytecode::Exists(sd_idx) => {
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
+            let size =
+              interpreter.global_data_op(solver, resolver, context, addr, *sd_idx, SymInterpreter::exists)?;
+            // gas!(instr: context, interpreter, Opcodes::EXISTS, size)?;
+          }
           // Bytecode::ExistsGeneric(si_idx) => {
           //   let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
           //   let size = interpreter.global_data_op_generic(
@@ -1204,19 +1213,20 @@ impl<'ctx> SymFrame<'ctx> {
           //   )?;
           //   // gas!(instr: context, interpreter, Opcodes::EXISTS_GENERIC, size)?;
           // }
-          // Bytecode::MoveFrom(sd_idx) => {
-          //   let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
-          //   let size = interpreter.global_data_op(
-          //     resolver,
-          //     context,
-          //     addr,
-          //     *sd_idx,
-          //     Interpreter::move_from,
-          //   )?;
-          //   // TODO: Have this calculate before pulling in the data based upon
-          //   // the size of the data that we are about to read in.
-          //   // gas!(instr: context, interpreter, Opcodes::MOVE_FROM, size)?;
-          // }
+          Bytecode::MoveFrom(sd_idx) => {
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
+            let size = interpreter.global_data_op(
+              solver,
+              resolver,
+              context,
+              addr,
+              *sd_idx,
+              SymInterpreter::move_from,
+            )?;
+            // TODO: Have this calculate before pulling in the data based upon
+            // the size of the data that we are about to read in.
+            // gas!(instr: context, interpreter, Opcodes::MOVE_FROM, size)?;
+          }
           // Bytecode::MoveFromGeneric(si_idx) => {
           //   let addr = interpreter.operand_stack.pop_as::<AccountAddress>()?;
           //   let size = interpreter.global_data_op_generic(
@@ -1236,17 +1246,18 @@ impl<'ctx> SymFrame<'ctx> {
           //     size
           //   )?;
           // }
-          // Bytecode::MoveToSender(sd_idx) => {
-          //   let addr = interpreter.txn_data.sender();
-          //   let size = interpreter.global_data_op(
-          //     resolver,
-          //     context,
-          //     addr,
-          //     *sd_idx,
-          //     Interpreter::move_to_sender,
-          //   )?;
-          //   // gas!(instr: context, interpreter, Opcodes::MOVE_TO_SENDER, size)?;
-          // }
+          Bytecode::MoveToSender(sd_idx) => {
+            let addr = interpreter.txn_data.sender();
+            let size = interpreter.global_data_op(
+              solver,
+              resolver,
+              context,
+              addr,
+              *sd_idx,
+              SymInterpreter::move_to_sender,
+            )?;
+            // gas!(instr: context, interpreter, Opcodes::MOVE_TO_SENDER, size)?;
+          }
           // Bytecode::MoveToSenderGeneric(si_idx) => {
           //   let addr = interpreter.txn_data.sender();
           //   let size = interpreter.global_data_op_generic(
@@ -1264,19 +1275,20 @@ impl<'ctx> SymFrame<'ctx> {
           //     size
           //   )?;
           // }
-          // Bytecode::MoveTo(sd_idx) => {
-          //   let resource = interpreter.operand_stack.pop_as::<Struct>()?;
-          //   let signer_reference = interpreter.operand_stack.pop_as::<SymReference>()?;
-          //   let addr = signer_reference.read_ref()?.value_as::<AccountAddress>()?;
-          //   let size = interpreter.global_data_op(
-          //     resolver,
-          //     context,
-          //     addr,
-          //     *sd_idx,
-          //     Interpreter::move_to(resource),
-          //   )?;
-          //   // gas!(instr: context, interpreter, Opcodes::MOVE_TO, size)?;
-          // }
+          Bytecode::MoveTo(sd_idx) => {
+            let resource = interpreter.operand_stack.pop_as::<SymStruct>()?;
+            let signer_reference = interpreter.operand_stack.pop_as::<SymReference>()?;
+            let addr = signer_reference.read_ref()?.value_as::<SymAccountAddress>()?.into_address();
+            let size = interpreter.global_data_op(
+              solver,
+              resolver,
+              context,
+              addr,
+              *sd_idx,
+              SymInterpreter::move_to(resource),
+            )?;
+            // gas!(instr: context, interpreter, Opcodes::MOVE_TO, size)?;
+          }
           // Bytecode::MoveToGeneric(si_idx) => {
           //   let resource = interpreter.operand_stack.pop_as::<Struct>()?;
           //   let signer_reference = interpreter.operand_stack.pop_as::<SymReference>()?;

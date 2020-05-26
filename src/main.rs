@@ -13,7 +13,6 @@ use std::{
 };
 use structopt::StructOpt;
 
-extern crate engine;
 use engine::Engine;
 
 #[derive(Debug, StructOpt)]

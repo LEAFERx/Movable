@@ -11,16 +11,16 @@ use libra_types::{
     VMStatus
   },
 };
-// use move_core_types::gas_schedule::{
-//   words_in, AbstractMemorySize, GasAlgebra, GasCarrier, CONST_SIZE, REFERENCE_SIZE, STRUCT_SIZE,
-// };
+use move_core_types::gas_schedule::{
+  words_in, AbstractMemorySize, GasAlgebra, GasCarrier, CONST_SIZE, REFERENCE_SIZE, STRUCT_SIZE,
+};
 use std::{
   cell::{Ref, RefCell, RefMut},
   // collections::VecDeque,
   fmt::{self, Debug, Display},
   iter,
-  // mem::size_of,
-  // ops::Add,
+  mem::size_of,
+  ops::Add,
   rc::Rc,
 };
 use vm::{
@@ -1816,80 +1816,82 @@ impl<'ctx> SymIntegerValue<'ctx> {
 *
 **************************************************************************************/
 
-// impl<'ctx> SymContainer<'ctx> {
-//   fn size(&self) -> AbstractMemorySize<GasCarrier> {
-//     match self {
-//       Self::General(v) => v
-//         .iter()
-//         .fold(STRUCT_SIZE, |acc, v| acc.map2(v.size(), Add::add)),
-//       Self::U8(v) => AbstractMemorySize::new((v.len() * size_of::<u8>()) as u64),
-//       Self::U64(v) => AbstractMemorySize::new((v.len() * size_of::<u64>()) as u64),
-//       Self::U128(v) => AbstractMemorySize::new((v.len() * size_of::<u128>()) as u64),
-//       Self::Bool(v) => AbstractMemorySize::new((v.len() * size_of::<bool>()) as u64),
-//     }
-//   }
-// }
+impl<'ctx> SymContainer<'ctx> {
+  fn size(&self) -> AbstractMemorySize<GasCarrier> {
+    use SymContainerImpl::*;
 
-// impl<'ctx> SymContainerRef<'ctx> {
-//   fn size(&self) -> AbstractMemorySize<GasCarrier> {
-//     words_in(REFERENCE_SIZE)
-//   }
-// }
+    match &self.container {
+      General(v) => v
+        .iter()
+        .fold(STRUCT_SIZE, |acc, v| acc.map2(v.size(), Add::add)),
+      U8(v) => AbstractMemorySize::new((v.len() * size_of::<u8>()) as u64),
+      U64(v) => AbstractMemorySize::new((v.len() * size_of::<u64>()) as u64),
+      U128(v) => AbstractMemorySize::new((v.len() * size_of::<u128>()) as u64),
+      Bool(v) => AbstractMemorySize::new((v.len() * size_of::<bool>()) as u64),
+    }
+  }
+}
 
-// impl<'ctx> SymIndexedRef<'ctx> {
-//   fn size(&self) -> AbstractMemorySize<GasCarrier> {
-//     words_in(REFERENCE_SIZE)
-//   }
-// }
+impl<'ctx> SymContainerRef<'ctx> {
+  fn size(&self) -> AbstractMemorySize<GasCarrier> {
+    words_in(REFERENCE_SIZE)
+  }
+}
 
-// impl<'ctx> SymValueImpl<'ctx> {
-//   fn size(&self) -> AbstractMemorySize<GasCarrier> {
-//     use SymValueImpl::*;
+impl<'ctx> SymIndexedRef<'ctx> {
+  fn size(&self) -> AbstractMemorySize<GasCarrier> {
+    words_in(REFERENCE_SIZE)
+  }
+}
 
-//     match self {
-//       Invalid | U8(_) | U64(_) | U128(_) | Bool(_) => CONST_SIZE,
-//       Address(_) | Signer(_) => AbstractMemorySize::new(SymAccountAddress::LENGTH as u64),
-//       ContainerRef(r) => r.size(),
-//       IndexedRef(r) => r.size(),
-//       // TODO: in case the borrow fails the VM will panic.
-//       Container(r) => r.borrow().size(),
-//     }
-//   }
-// }
+impl<'ctx> SymValueImpl<'ctx> {
+  fn size(&self) -> AbstractMemorySize<GasCarrier> {
+    use SymValueImpl::*;
 
-// impl<'ctx> SymStruct<'ctx> {
-//   pub fn size(&self) -> AbstractMemorySize<GasCarrier> {
-//     self.0.size()
-//   }
-// }
+    match self {
+      Invalid | U8(_) | U64(_) | U128(_) | Bool(_) => CONST_SIZE,
+      Address(_) | Signer(_) => AbstractMemorySize::new(SymAccountAddress::LENGTH as u64),
+      ContainerRef(r) => r.size(),
+      IndexedRef(r) => r.size(),
+      // TODO: in case the borrow fails the VM will panic.
+      Container(r) => r.borrow().size(),
+    }
+  }
+}
 
-// impl<'ctx> SymValue<'ctx> {
-//   pub fn size(&self) -> AbstractMemorySize<GasCarrier> {
-//     self.0.size()
-//   }
-// }
+impl<'ctx> SymStruct<'ctx> {
+  pub fn size(&self) -> AbstractMemorySize<GasCarrier> {
+    self.0.size()
+  }
+}
 
-// impl<'ctx> SymReferenceImpl<'ctx> {
-//   fn size(&self) -> AbstractMemorySize<GasCarrier> {
-//     match self {
-//       Self::ContainerRef(r) => r.size(),
-//       Self::IndexedRef(r) => r.size(),
-//     }
-//   }
-// }
+impl<'ctx> SymValue<'ctx> {
+  pub fn size(&self) -> AbstractMemorySize<GasCarrier> {
+    self.0.size()
+  }
+}
 
-// impl<'ctx> SymReference<'ctx> {
-//   pub fn size(&self) -> AbstractMemorySize<GasCarrier> {
-//     self.0.size()
-//   }
-// }
+impl<'ctx> SymReferenceImpl<'ctx> {
+  fn size(&self) -> AbstractMemorySize<GasCarrier> {
+    match self {
+      Self::ContainerRef(r) => r.size(),
+      Self::IndexedRef(r) => r.size(),
+    }
+  }
+}
 
-// impl<'ctx> SymGlobalValue<'ctx> {
-//   pub fn size(&self) -> AbstractMemorySize<GasCarrier> {
-//     // TODO: should it be self.container.borrow().size()
-//     words_in(REFERENCE_SIZE)
-//   }
-// }
+impl<'ctx> SymReference<'ctx> {
+  pub fn size(&self) -> AbstractMemorySize<GasCarrier> {
+    self.0.size()
+  }
+}
+
+impl<'ctx> SymGlobalValue<'ctx> {
+  pub fn size(&self) -> AbstractMemorySize<GasCarrier> {
+    // TODO: should it be self.container.borrow().size()
+    words_in(REFERENCE_SIZE)
+  }
+}
 
 /***************************************************************************************
 *

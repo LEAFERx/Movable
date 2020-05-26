@@ -18,11 +18,17 @@ pub struct SymAccountAddress<'ctx> {
 }
 
 impl<'ctx> SymAccountAddress<'ctx> {
+  pub const LENGTH: usize = AccountAddress::LENGTH;
+
   pub fn new(solver: &'ctx Solver<'ctx>, address: AccountAddress) -> Self {
     SymAccountAddress {
       solver,
       address,
     }
+  }
+
+  pub fn into_address(self) -> AccountAddress {
+    self.address
   }
 
   pub fn short_str(&self) -> String {

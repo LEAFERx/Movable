@@ -1,7 +1,4 @@
-// Copyright (c) The Libra Core Contributors
-// SPDX-License-Identifier: Apache-2.0
-
-use crate::runtime::{interpreter::Interpreter, loader::Loader};
+use crate::runtime::{interpreter::SymInterpreter, loader::Loader};
 use bytecode_verifier::VerifiedModule;
 // use libra_logger::prelude::*;
 use libra_types::vm_error::{StatusCode, VMStatus};
@@ -11,8 +8,9 @@ use move_core_types::{
   language_storage::{ModuleId, TypeTag},
 };
 use move_vm_types::{
-  interpreter_context::InterpreterContext, transaction_metadata::TransactionMetadata,
+  transaction_metadata::TransactionMetadata,
 };
+use crate::types::interpreter_context::SymInterpreterContext;
 
 use vm::{
   access::ModuleAccess,
@@ -50,7 +48,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub(crate) fn publish_module(
     &self,
     module: Vec<u8>,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
     txn_data: &TransactionMetadata,
   ) -> VMResult<()> {
     let compiled_module = match CompiledModule::deserialize(&module) {
@@ -90,7 +88,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub fn execute_script(
     &self,
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
     txn_data: &TransactionMetadata,
     gas_schedule: &CostTable,
     script: Vec<u8>,
@@ -108,11 +106,11 @@ impl<'ctx> VMRuntime<'ctx> {
       .verify_ty_args(main.type_parameters(), &type_params)?;
     verify_args(main.parameters(), &args)?;
 
-    Interpreter::entrypoint(
+    SymInterpreter::entrypoint(
       solver,
       context,
       &self.loader,
-      // txn_data,
+      txn_data,
       // gas_schedule,
       main,
       // type_params,
@@ -123,8 +121,8 @@ impl<'ctx> VMRuntime<'ctx> {
   pub fn execute_function(
     &self,
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn InterpreterContext,
-    // txn_data: &TransactionMetadata,
+    context: &mut dyn SymInterpreterContext,
+    txn_data: &TransactionMetadata,
     // gas_schedule: &CostTable,
     module: &ModuleId,
     function_name: &IdentStr,
@@ -143,11 +141,11 @@ impl<'ctx> VMRuntime<'ctx> {
     // REVIEW: argument verification should happen in the interpreter
     //verify_args(func.parameters(), &args)?;
 
-    Interpreter::entrypoint(
+    SymInterpreter::entrypoint(
       solver,
       context,
       &self.loader,
-      // txn_data,
+      txn_data,
       // gas_schedule,
       func,
       // type_params,
@@ -158,7 +156,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub fn cache_module(
     &self,
     module: VerifiedModule,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
   ) -> VMResult<()> {
     self.loader.cache_module(module, context)
   }
@@ -167,7 +165,7 @@ impl<'ctx> VMRuntime<'ctx> {
     &self,
     function_name: &IdentStr,
     module_id: &ModuleId,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
   ) -> VMResult<Arc<Function>> {
     self.loader.load_function(function_name, module_id, context)
   }

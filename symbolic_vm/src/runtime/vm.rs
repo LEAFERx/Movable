@@ -5,8 +5,9 @@ use move_core_types::{
   identifier::IdentStr,
   language_storage::{ModuleId, TypeTag},};
 use move_vm_types::{
-  chain_state::ChainState, transaction_metadata::TransactionMetadata,
+  transaction_metadata::TransactionMetadata,
 };
+use crate::types::chain_state::SymChainState;
 use libra_types::{
   vm_error::{StatusCode, VMStatus},
 };
@@ -33,13 +34,13 @@ impl<'ctx> SymbolicVM<'ctx> {
     }
   }
 
-  pub fn execute_function<S: ChainState>(
+  pub fn execute_function<S: SymChainState>(
     &self,
     module: &ModuleId,
     function_name: &IdentStr,
     // gas_schedule: &CostTable,
     chain_state: &mut S,
-    // txn_data: &TransactionMetadata,
+    txn_data: &TransactionMetadata,
     // ty_args: Vec<TypeTag>,
     // args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
@@ -47,7 +48,7 @@ impl<'ctx> SymbolicVM<'ctx> {
     self.runtime.execute_function(
       self.solver,
       chain_state,
-      // txn_data,
+      txn_data,
       // gas_schedule,
       module,
       function_name,
@@ -56,7 +57,7 @@ impl<'ctx> SymbolicVM<'ctx> {
     )
   }
 
-  pub fn execute_script<S: ChainState>(
+  pub fn execute_script<S: SymChainState>(
     &self,
     script: Vec<u8>,
     gas_schedule: &CostTable,
@@ -70,7 +71,7 @@ impl<'ctx> SymbolicVM<'ctx> {
       .execute_script(self.solver, chain_state, txn_data, gas_schedule, script, ty_args, args)
   }
 
-  pub fn publish_module<S: ChainState>(
+  pub fn publish_module<S: SymChainState>(
     &self,
     module: Vec<u8>,
     chain_state: &mut S,
@@ -79,7 +80,7 @@ impl<'ctx> SymbolicVM<'ctx> {
     self.runtime.publish_module(module, chain_state, txn_data)
   }
 
-  pub fn cache_module<S: ChainState>(
+  pub fn cache_module<S: SymChainState>(
     &self,
     module: VerifiedModule,
     chain_state: &mut S,
@@ -95,7 +96,7 @@ impl<'ctx> SymbolicVM<'ctx> {
 // }
 
 //// Construct symbolic arguments
-fn construct_symbolic_args<'ctx, S: ChainState>(
+fn construct_symbolic_args<'ctx, S: SymChainState>(
   module: &ModuleId,
   function_name: &IdentStr,
   solver: &'ctx Solver<'ctx>,

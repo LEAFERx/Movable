@@ -1,4 +1,4 @@
-use crate::runtime::{interpreter::Interpreter, loader::Resolver};
+use crate::runtime::{interpreter::SymInterpreter, loader::Resolver};
 use libra_types::{
   access_path::AccessPath, account_address::AccountAddress, account_config::CORE_CODE_ADDRESS,
   contract_event::ContractEvent,
@@ -6,11 +6,11 @@ use libra_types::{
 use move_core_types::{gas_schedule::CostTable, identifier::IdentStr, language_storage::ModuleId};
 use move_vm_natives::{account, event, hash, lcs, signature};
 use move_vm_types::{
-  interpreter_context::InterpreterContext,
   loaded_data::{runtime_types::Type, types::FatType},
   natives::function::{NativeContext, NativeResult},
   values::{debug, vector, Struct, Value},
 };
+use crate::types::interpreter_context::SymInterpreterContext;
 use std::{collections::VecDeque, fmt::Write};
 use vm::errors::VMResult;
 
@@ -108,15 +108,15 @@ impl NativeFunction {
 }
 
 pub(crate) struct FunctionContext<'a, 'vtxn, 'ctx> {
-  interpreter: &'a mut Interpreter<'vtxn, 'ctx>,
-  interpreter_context: &'a mut dyn InterpreterContext,
+  interpreter: &'a mut SymInterpreter<'vtxn, 'ctx>,
+  interpreter_context: &'a mut dyn SymInterpreterContext,
   resolver: &'a Resolver<'a>,
 }
 
 impl<'a, 'vtxn, 'ctx> FunctionContext<'a, 'vtxn, 'ctx> {
   pub(crate) fn new(
-    interpreter: &'a mut Interpreter<'vtxn, 'ctx>,
-    context: &'a mut dyn InterpreterContext,
+    interpreter: &'a mut SymInterpreter<'vtxn, 'ctx>,
+    context: &'a mut dyn SymInterpreterContext,
     resolver: &'a Resolver<'a>,
   ) -> FunctionContext<'a, 'vtxn, 'ctx> {
     FunctionContext {

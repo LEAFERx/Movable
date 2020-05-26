@@ -14,12 +14,12 @@ use move_core_types::{
   language_storage::{ModuleId, StructTag, TypeTag},
 };
 use move_vm_types::{
-  interpreter_context::InterpreterContext,
   loaded_data::{
     runtime_types::{StructType, Type, TypeConverter},
     types::{FatStructType, FatType},
   },
 };
+use crate::types::interpreter_context::SymInterpreterContext;
 use std::{
   collections::{BTreeMap, HashMap},
   fmt::Debug,
@@ -325,7 +325,7 @@ impl Loader {
     &self,
     function_name: &IdentStr,
     module_id: &ModuleId,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
   ) -> VMResult<Arc<Function>> {
     self.load_module(module_id, context)?;
     let idx = self
@@ -339,7 +339,7 @@ impl Loader {
   pub(crate) fn load_script(
     &self,
     script_blob: &[u8],
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
   ) -> VMResult<Arc<Function>> {
     let hash_value = HashValue::from_sha3_256(script_blob);
     if let Some(main) = self.scripts.lock().unwrap().get(&hash_value) {
@@ -354,7 +354,7 @@ impl Loader {
   pub(crate) fn load_type(
     &self,
     type_tag: &TypeTag,
-    context: &dyn InterpreterContext,
+    context: &dyn SymInterpreterContext,
   ) -> VMResult<Type> {
     Ok(match type_tag {
       TypeTag::Bool => Type::Bool,
@@ -389,7 +389,7 @@ impl Loader {
   pub(crate) fn cache_module(
     &self,
     module: VerifiedModule,
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
   ) -> VMResult<()> {
     self.check_dependencies(&module, context)?;
     Self::check_natives(&module)?;
@@ -402,7 +402,7 @@ impl Loader {
       .and_then(|_| Ok(()))
   }
 
-  fn load_module(&self, id: &ModuleId, context: &dyn InterpreterContext) -> VMResult<Arc<Module>> {
+  fn load_module(&self, id: &ModuleId, context: &dyn SymInterpreterContext) -> VMResult<Arc<Module>> {
     if let Some(module) = self.module_cache.lock().unwrap().get(id) {
       return Ok(module);
     }
@@ -528,7 +528,7 @@ impl Loader {
   fn deserialize_and_verify_script(
     &self,
     script: &[u8],
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
   ) -> VMResult<VerifiedScript> {
     let script = match CompiledScript::deserialize(script) {
       Ok(script) => script,
@@ -572,7 +572,7 @@ impl Loader {
   fn deserialize_and_verify_module(
     &self,
     id: &ModuleId,
-    context: &dyn InterpreterContext,
+    context: &dyn SymInterpreterContext,
   ) -> VMResult<VerifiedModule> {
     let comp_module = match context.load_module(id) {
       Ok(blob) => match CompiledModule::deserialize(&blob) {
@@ -599,7 +599,7 @@ impl Loader {
   fn check_dependencies(
     &self,
     module: &VerifiedModule,
-    context: &dyn InterpreterContext,
+    context: &dyn SymInterpreterContext,
   ) -> VMResult<()> {
     let deps = load_module_dependencies(module);
     let mut dependencies = vec![];
@@ -721,7 +721,7 @@ impl<'a> Resolver<'a> {
     module_id: &ModuleId,
     name: &IdentStr,
     ty_args: &[Type],
-    context: &mut dyn InterpreterContext,
+    context: &mut dyn SymInterpreterContext,
   ) -> VMResult<Arc<LibraType>> {
     self.loader.load_module(module_id, context)?;
     self.loader.get_libra_type_info(module_id, name, ty_args)
