@@ -34,7 +34,7 @@ impl<'ctx> SymbolicVM<'ctx> {
     }
   }
 
-  pub fn execute_function<S: SymChainState>(
+  pub fn execute_function<S: SymChainState<'ctx>>(
     &self,
     module: &ModuleId,
     function_name: &IdentStr,
@@ -57,7 +57,7 @@ impl<'ctx> SymbolicVM<'ctx> {
     )
   }
 
-  pub fn execute_script<S: SymChainState>(
+  pub fn execute_script<S: SymChainState<'ctx>>(
     &self,
     script: Vec<u8>,
     gas_schedule: &CostTable,
@@ -71,7 +71,7 @@ impl<'ctx> SymbolicVM<'ctx> {
       .execute_script(self.solver, chain_state, txn_data, gas_schedule, script, ty_args, args)
   }
 
-  pub fn publish_module<S: SymChainState>(
+  pub fn publish_module<S: SymChainState<'ctx>>(
     &self,
     module: Vec<u8>,
     chain_state: &mut S,
@@ -80,7 +80,7 @@ impl<'ctx> SymbolicVM<'ctx> {
     self.runtime.publish_module(module, chain_state, txn_data)
   }
 
-  pub fn cache_module<S: SymChainState>(
+  pub fn cache_module<S: SymChainState<'ctx>>(
     &self,
     module: VerifiedModule,
     chain_state: &mut S,
@@ -96,7 +96,7 @@ impl<'ctx> SymbolicVM<'ctx> {
 // }
 
 //// Construct symbolic arguments
-fn construct_symbolic_args<'ctx, S: SymChainState>(
+fn construct_symbolic_args<'ctx, S: SymChainState<'ctx>>(
   module: &ModuleId,
   function_name: &IdentStr,
   solver: &'ctx Solver<'ctx>,

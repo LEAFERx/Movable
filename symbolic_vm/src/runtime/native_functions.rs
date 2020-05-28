@@ -109,14 +109,14 @@ impl NativeFunction {
 
 pub(crate) struct FunctionContext<'a, 'vtxn, 'ctx> {
   interpreter: &'a mut SymInterpreter<'vtxn, 'ctx>,
-  interpreter_context: &'a mut dyn SymInterpreterContext,
+  interpreter_context: &'a mut dyn SymInterpreterContext<'ctx>,
   resolver: &'a Resolver<'a>,
 }
 
 impl<'a, 'vtxn, 'ctx> FunctionContext<'a, 'vtxn, 'ctx> {
   pub(crate) fn new(
     interpreter: &'a mut SymInterpreter<'vtxn, 'ctx>,
-    context: &'a mut dyn SymInterpreterContext,
+    context: &'a mut dyn SymInterpreterContext<'ctx>,
     resolver: &'a Resolver<'a>,
   ) -> FunctionContext<'a, 'vtxn, 'ctx> {
     FunctionContext {

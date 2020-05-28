@@ -19,32 +19,28 @@ use solver::Solver;
 
 /// The `InterpreterContext` context trait specifies the mutations that are allowed to the
 /// `TransactionExecutionContext` within the interpreter.
-pub trait SymInterpreterContext {
-  fn move_resource_to<'ctx>(
+pub trait SymInterpreterContext<'ctx> {
+  fn move_resource_to(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType,
     resource: SymStruct<'ctx>,
   ) -> VMResult<()>;
 
-  fn move_resource_from<'ctx>(
+  fn move_resource_from(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType
   ) -> VMResult<SymValue<'ctx>>;
 
-  fn resource_exists<'ctx>(
+  fn resource_exists(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType,
   ) -> VMResult<(bool, AbstractMemorySize<GasCarrier>)>;
 
-  fn borrow_global<'ctx>(
+  fn borrow_global(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType
   ) -> VMResult<&SymGlobalValue<'ctx>>;
@@ -62,17 +58,16 @@ pub trait SymInterpreterContext {
   fn publish_module(&mut self, module_id: ModuleId, module: Vec<u8>) -> VMResult<()>;
 }
 
-impl<T: SymChainState> SymInterpreterContext for T {
-  fn move_resource_to<'ctx>(
+impl<'ctx, T: SymChainState<'ctx>> SymInterpreterContext<'ctx> for T {
+  fn move_resource_to(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType,
     resource: SymStruct<'ctx>,
   ) -> VMResult<()> {
     // a resource can be written to an AccessPath if the data does not exists or
     // it was deleted (MoveFrom)
-    let can_write = match self.borrow_resource(solver, ap, ty) {
+    let can_write = match self.borrow_resource(ap, ty) {
       Ok(None) => true,
       Ok(Some(_)) => false,
       Err(e) => match e.major_status {
@@ -93,13 +88,12 @@ impl<T: SymChainState> SymInterpreterContext for T {
     }
   }
 
-  fn move_resource_from<'ctx>(
+  fn move_resource_from(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType,
   ) -> VMResult<SymValue<'ctx>> {
-    let root_value = match SymChainState::move_resource_from(self, solver, ap, ty) {
+    let root_value = match SymChainState::move_resource_from(self, ap, ty) {
       Ok(g) => g,
       Err(e) => {
         warn!("[VM] (MoveFrom) Error reading data for {}: {:?}", ap, e);
@@ -116,25 +110,23 @@ impl<T: SymChainState> SymInterpreterContext for T {
     }
   }
 
-  fn resource_exists<'ctx>(
+  fn resource_exists(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType,
   ) -> VMResult<(bool, AbstractMemorySize<GasCarrier>)> {
-    Ok(match self.borrow_resource(solver, ap, ty) {
+    Ok(match self.borrow_resource(ap, ty) {
       Ok(Some(gref)) => (true, gref.size()),
       Ok(None) | Err(_) => (false, AbstractMemorySize::new(0)),
     })
   }
 
-  fn borrow_global<'ctx>(
+  fn borrow_global(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType,
   ) -> VMResult<&SymGlobalValue<'ctx>> {
-    match self.borrow_resource(solver, ap, ty) {
+    match self.borrow_resource(ap, ty) {
       Ok(Some(g)) => Ok(g),
       Ok(None) => Err(
         // TODO: wrong status code?

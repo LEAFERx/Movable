@@ -48,7 +48,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub(crate) fn publish_module(
     &self,
     module: Vec<u8>,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     txn_data: &TransactionMetadata,
   ) -> VMResult<()> {
     let compiled_module = match CompiledModule::deserialize(&module) {
@@ -88,7 +88,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub fn execute_script(
     &self,
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     txn_data: &TransactionMetadata,
     gas_schedule: &CostTable,
     script: Vec<u8>,
@@ -121,7 +121,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub fn execute_function(
     &self,
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     txn_data: &TransactionMetadata,
     // gas_schedule: &CostTable,
     module: &ModuleId,
@@ -156,7 +156,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub fn cache_module(
     &self,
     module: VerifiedModule,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
   ) -> VMResult<()> {
     self.loader.cache_module(module, context)
   }
@@ -165,7 +165,7 @@ impl<'ctx> VMRuntime<'ctx> {
     &self,
     function_name: &IdentStr,
     module_id: &ModuleId,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
   ) -> VMResult<Arc<Function>> {
     self.loader.load_function(function_name, module_id, context)
   }

@@ -10,7 +10,7 @@ use vm::errors::VMResult;
 use solver::Solver;
 
 /// Trait that describes what Move bytecode runtime expects from the Libra blockchain.
-pub trait SymChainState {
+pub trait SymChainState<'ctx> {
   // ---
   // Gas operations
   // ---
@@ -36,17 +36,15 @@ pub trait SymChainState {
   fn load_module(&self, module: &ModuleId) -> VMResult<Vec<u8>>;
 
   /// Get a reference to a resource stored on chain.
-  fn borrow_resource<'ctx>(
+  fn borrow_resource(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType,
   ) -> VMResult<Option<&SymGlobalValue<'ctx>>>;
 
   /// Transfer ownership of a resource stored on chain to the VM.
-  fn move_resource_from<'ctx>(
+  fn move_resource_from(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
     ap: &AccessPath,
     ty: &FatStructType,
   ) -> VMResult<Option<SymGlobalValue<'ctx>>>;
@@ -55,7 +53,7 @@ pub trait SymChainState {
   fn publish_module(&mut self, module_id: ModuleId, module: Vec<u8>) -> VMResult<()>;
 
   /// Publish a resource to be stored on chain.
-  fn publish_resource<'ctx>(&mut self, ap: &AccessPath, g: (FatStructType, SymGlobalValue<'ctx>)) -> VMResult<()>;
+  fn publish_resource(&mut self, ap: &AccessPath, g: (FatStructType, SymGlobalValue<'ctx>)) -> VMResult<()>;
 
   /// Check if this module exists on chain.
   // TODO: Can we get rid of this api with the loader refactor?

@@ -14,6 +14,10 @@ use libra_types::{
 use move_core_types::gas_schedule::{
   words_in, AbstractMemorySize, GasAlgebra, GasCarrier, CONST_SIZE, REFERENCE_SIZE, STRUCT_SIZE,
 };
+use move_vm_types::{
+  loaded_data::types::{FatStructType, FatType},
+  values::{Struct, Value, VMValueCast},
+};
 use std::{
   cell::{Ref, RefCell, RefMut},
   // collections::VecDeque,
@@ -920,6 +924,25 @@ impl<'ctx> SymLocals<'ctx> {
 *
 **************************************************************************************/
 impl<'ctx> SymValue<'ctx> {
+  pub fn from_deserialized_value(solver: &'ctx Solver<'ctx>, value: Value, ty: &FatType) -> VMResult<Self> {
+    match ty {
+      FatType::Bool => Ok(SymValue::from_bool(solver, value.value_as()?)),
+      FatType::U8 => Ok(SymValue::from_u8(solver, value.value_as()?)),
+      FatType::U64 => Ok(SymValue::from_u64(solver, value.value_as()?)),
+      FatType::U128 => Ok(SymValue::from_u128(solver, value.value_as()?)),
+      FatType::Address => Ok(SymValue::from_address(solver, value.value_as()?)),
+      FatType::Signer => Ok(SymValue::from_signer(solver, value.value_as()?)),
+      FatType::Vector(_) => unimplemented!(),
+      FatType::Struct(struct_type) => Ok(SymValue::from_deserialized_struct(solver, VMValueCast::cast(value)?, struct_type)?),
+      FatType::Reference(_) | FatType::MutableReference(_) | FatType::TyParam(_) => {
+        Err(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("Such type {:?} is not possibly from deserialzed!", ty))
+        )
+      }
+    }
+  }
+
   pub fn from_u8(solver: &'ctx Solver<'ctx>, value: u8) -> Self {
     SymValue(SymValueImpl::U8(SymU8::from(solver, value)))
   }
@@ -988,6 +1011,15 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::Signer(signer))
   }
 
+  pub fn from_deserialized_struct(solver: &'ctx Solver<'ctx>, s: Struct, ty: &FatStructType) -> VMResult<Self> {
+    let fields: Vec<SymValue> = s.unpack()?
+      .into_iter()
+      .enumerate()
+      .map(|(idx, v)| SymValue::from_deserialized_value(solver, v, &ty.layout[idx]))
+      .collect::<VMResult<_>>()?;
+    Ok(SymValue::from_sym_struct(SymStruct::pack(solver, fields)))
+  }
+
   pub fn from_sym_struct(s: SymStruct<'ctx>) -> Self {
     SymValue(SymValueImpl::new_container(s.0))
   }
@@ -1037,13 +1069,13 @@ impl<'ctx> SymValue<'ctx> {
 *   the conversion will succeed. An error will be raised in case of a violation.
 *
 **************************************************************************************/
-pub trait VMValueCast<T> {
+pub trait VMSymValueCast<T> {
   fn cast(self) -> VMResult<T>;
 }
 
-macro_rules! impl_vm_value_cast {
+macro_rules! impl_vm_sym_value_cast {
   ($ty: ty, $tc: ident) => {
-    impl<'ctx> VMValueCast<$ty> for SymValue<'ctx> {
+    impl<'ctx> VMSymValueCast<$ty> for SymValue<'ctx> {
       fn cast(self) -> VMResult<$ty> {
         match self.0 {
           SymValueImpl::$tc(x) => Ok(x),
@@ -1061,15 +1093,15 @@ macro_rules! impl_vm_value_cast {
 }
 
 // !!!
-impl_vm_value_cast!(SymU8<'ctx>, U8);
-impl_vm_value_cast!(SymU64<'ctx>, U64);
-impl_vm_value_cast!(SymU128<'ctx>, U128);
-impl_vm_value_cast!(SymBool<'ctx>, Bool);
-impl_vm_value_cast!(SymAccountAddress<'ctx>, Address);
-impl_vm_value_cast!(SymContainerRef<'ctx>, ContainerRef);
-impl_vm_value_cast!(SymIndexedRef<'ctx>, IndexedRef);
+impl_vm_sym_value_cast!(SymU8<'ctx>, U8);
+impl_vm_sym_value_cast!(SymU64<'ctx>, U64);
+impl_vm_sym_value_cast!(SymU128<'ctx>, U128);
+impl_vm_sym_value_cast!(SymBool<'ctx>, Bool);
+impl_vm_sym_value_cast!(SymAccountAddress<'ctx>, Address);
+impl_vm_sym_value_cast!(SymContainerRef<'ctx>, ContainerRef);
+impl_vm_sym_value_cast!(SymIndexedRef<'ctx>, IndexedRef);
 
-impl<'ctx> VMValueCast<SymIntegerValue<'ctx>> for SymValue<'ctx> {
+impl<'ctx> VMSymValueCast<SymIntegerValue<'ctx>> for SymValue<'ctx> {
   fn cast(self) -> VMResult<SymIntegerValue<'ctx>> {
     match self.0 {
       SymValueImpl::U8(x) => Ok(SymIntegerValue::U8(x)),
@@ -1083,7 +1115,7 @@ impl<'ctx> VMValueCast<SymIntegerValue<'ctx>> for SymValue<'ctx> {
   }
 }
 
-impl<'ctx> VMValueCast<SymReference<'ctx>> for SymValue<'ctx> {
+impl<'ctx> VMSymValueCast<SymReference<'ctx>> for SymValue<'ctx> {
   fn cast(self) -> VMResult<SymReference<'ctx>> {
     match self.0 {
       SymValueImpl::ContainerRef(r) => Ok(SymReference(SymReferenceImpl::ContainerRef(r))),
@@ -1096,7 +1128,7 @@ impl<'ctx> VMValueCast<SymReference<'ctx>> for SymValue<'ctx> {
   }
 }
 
-impl<'ctx> VMValueCast<SymContainer<'ctx>> for SymValue<'ctx> {
+impl<'ctx> VMSymValueCast<SymContainer<'ctx>> for SymValue<'ctx> {
   fn cast(self) -> VMResult<SymContainer<'ctx>> {
     match self.0 {
       SymValueImpl::Container(r) => take_unique_ownership(r),
@@ -1109,7 +1141,7 @@ impl<'ctx> VMValueCast<SymContainer<'ctx>> for SymValue<'ctx> {
 }
 
 // ???
-impl<'ctx> VMValueCast<Vec<SymValue<'ctx>>> for SymValue<'ctx> {
+impl<'ctx> VMSymValueCast<Vec<SymValue<'ctx>>> for SymValue<'ctx> {
   fn cast(self) -> VMResult<Vec<SymValue<'ctx>>> {
     match self.0 {
       SymValueImpl::Container(r) => Ok(match take_unique_ownership(r)?.container {
@@ -1127,7 +1159,7 @@ impl<'ctx> VMValueCast<Vec<SymValue<'ctx>>> for SymValue<'ctx> {
   }
 }
 
-impl<'ctx> VMValueCast<SymStruct<'ctx>> for SymValue<'ctx> {
+impl<'ctx> VMSymValueCast<SymStruct<'ctx>> for SymValue<'ctx> {
   fn cast(self) -> VMResult<SymStruct<'ctx>> {
     match self.0 {
       SymValueImpl::Container(r) => Ok(SymStruct(take_unique_ownership(r)?)),
@@ -1139,13 +1171,13 @@ impl<'ctx> VMValueCast<SymStruct<'ctx>> for SymValue<'ctx> {
   }
 }
 
-impl<'ctx> VMValueCast<SymStructRef<'ctx>> for SymValue<'ctx> {
+impl<'ctx> VMSymValueCast<SymStructRef<'ctx>> for SymValue<'ctx> {
   fn cast(self) -> VMResult<SymStructRef<'ctx>> {
-    Ok(SymStructRef(VMValueCast::cast(self)?))
+    Ok(SymStructRef(VMSymValueCast::cast(self)?))
   }
 }
 
-impl<'ctx> VMValueCast<Vec<SymU8<'ctx>>> for SymValue<'ctx> {
+impl<'ctx> VMSymValueCast<Vec<SymU8<'ctx>>> for SymValue<'ctx> {
   fn cast(self) -> VMResult<Vec<SymU8<'ctx>>> {
     match self.0 {
       SymValueImpl::Container(r) => match take_unique_ownership(r)?.container {
@@ -1166,13 +1198,13 @@ impl<'ctx> VMValueCast<Vec<SymU8<'ctx>>> for SymValue<'ctx> {
 impl<'ctx> SymValue<'ctx> {
   pub fn value_as<T>(self) -> VMResult<T>
   where
-    Self: VMValueCast<T>,
+    Self: VMSymValueCast<T>,
   {
-    VMValueCast::cast(self)
+    VMSymValueCast::cast(self)
   }
 }
 
-impl<'ctx> VMValueCast<SymU8<'ctx>> for SymIntegerValue<'ctx> {
+impl<'ctx> VMSymValueCast<SymU8<'ctx>> for SymIntegerValue<'ctx> {
   fn cast(self) -> VMResult<SymU8<'ctx>> {
     match self {
       Self::U8(x) => Ok(x),
@@ -1184,7 +1216,7 @@ impl<'ctx> VMValueCast<SymU8<'ctx>> for SymIntegerValue<'ctx> {
   }
 }
 
-impl<'ctx> VMValueCast<SymU64<'ctx>> for SymIntegerValue<'ctx> {
+impl<'ctx> VMSymValueCast<SymU64<'ctx>> for SymIntegerValue<'ctx> {
   fn cast(self) -> VMResult<SymU64<'ctx>> {
     match self {
       Self::U64(x) => Ok(x),
@@ -1196,7 +1228,7 @@ impl<'ctx> VMValueCast<SymU64<'ctx>> for SymIntegerValue<'ctx> {
   }
 }
 
-impl<'ctx> VMValueCast<SymU128<'ctx>> for SymIntegerValue<'ctx> {
+impl<'ctx> VMSymValueCast<SymU128<'ctx>> for SymIntegerValue<'ctx> {
   fn cast(self) -> VMResult<SymU128<'ctx>> {
     match self {
       Self::U128(x) => Ok(x),
@@ -1211,9 +1243,9 @@ impl<'ctx> VMValueCast<SymU128<'ctx>> for SymIntegerValue<'ctx> {
 impl<'ctx> SymIntegerValue<'ctx> {
   pub fn value_as<T>(self) -> VMResult<T>
   where
-    Self: VMValueCast<T>,
+    Self: VMSymValueCast<T>,
   {
-    VMValueCast::cast(self)
+    VMSymValueCast::cast(self)
   }
 }
 

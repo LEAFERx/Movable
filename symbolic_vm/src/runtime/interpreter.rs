@@ -26,7 +26,7 @@ use crate::{
   types::{
     values::{
       SymU8, SymU64, /* SymU128, */ SymBool, SymAccountAddress,
-      SymIntegerValue, SymLocals, SymReference, SymStruct, SymStructRef, SymValue, VMValueCast,
+      SymIntegerValue, SymLocals, SymReference, SymStruct, SymStructRef, SymValue, VMSymValueCast,
     },
     interpreter_context::SymInterpreterContext,
   },
@@ -96,7 +96,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// function.
   pub(crate) fn entrypoint(
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     loader: &Loader,
     txn_data: &'vtxn TransactionMetadata,
     // gas_schedule: &'vtxn CostTable,
@@ -160,7 +160,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     &mut self,
     solver: &'ctx Solver<'ctx>,
     loader: &Loader,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     function: Arc<Function>,
     // ty_args: Vec<Type>,
     args: Vec<SymValue<'ctx>>,
@@ -344,7 +344,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// Perform a binary operation to two values at the top of the stack.
   fn binop<F, T>(&mut self, f: F) -> VMResult<()>
   where
-    SymValue<'ctx>: VMValueCast<T>,
+    SymValue<'ctx>: VMSymValueCast<T>,
     F: FnOnce(T, T) -> VMResult<SymValue<'ctx>>,
   {
     let rhs = self.operand_stack.pop_as::<T>()?;
@@ -370,7 +370,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// Perform a binary operation for boolean values.
   fn binop_bool<F, T>(&mut self, f: F) -> VMResult<()>
   where
-    SymValue<'ctx>: VMValueCast<T>,
+    SymValue<'ctx>: VMSymValueCast<T>,
     F: FnOnce(T, T) -> VMResult<SymBool<'ctx>>,
   {
     self.binop(|lhs, rhs| Ok(SymValue::from_sym_bool(f(lhs, rhs)?)))
@@ -384,7 +384,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     &mut self,
     solver: &'ctx Solver<'ctx>,
     resolver: &Resolver,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     address: AccountAddress,
     idx: StructDefinitionIndex,
     op: F,
@@ -393,7 +393,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     F: FnOnce(
       &mut Self,
       &'ctx Solver<'ctx>,
-      &mut dyn SymInterpreterContext,
+      &mut dyn SymInterpreterContext<'ctx>,
       AccessPath,
       &FatStructType,
     ) -> VMResult<AbstractMemorySize<GasCarrier>>,
@@ -445,12 +445,12 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// BorrowGlobal (mutable and not) opcode.
   fn borrow_global(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
-    context: &mut dyn SymInterpreterContext,
+    _solver: &'ctx Solver<'ctx>,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     ap: AccessPath,
     struct_ty: &FatStructType,
   ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-    let g = context.borrow_global(solver, &ap, struct_ty)?;
+    let g = context.borrow_global(&ap, struct_ty)?;
     let size = g.size();
     self.operand_stack.push(g.borrow_global()?)?;
     Ok(size)
@@ -460,11 +460,11 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   fn exists(
     &mut self,
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     ap: AccessPath,
     struct_ty: &FatStructType,
   ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-    let (exists, mem_size) = context.resource_exists(solver, &ap, struct_ty)?;
+    let (exists, mem_size) = context.resource_exists(&ap, struct_ty)?;
     self.operand_stack.push(SymValue::from_bool(solver, exists))?;
     Ok(mem_size)
   }
@@ -472,12 +472,12 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// MoveFrom opcode.
   fn move_from(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
-    context: &mut dyn SymInterpreterContext,
+    _solver: &'ctx Solver<'ctx>,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     ap: AccessPath,
     struct_ty: &FatStructType,
   ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-    let resource = context.move_resource_from(solver, &ap, struct_ty)?;
+    let resource = context.move_resource_from(&ap, struct_ty)?;
     let size = resource.size();
     self.operand_stack.push(resource)?;
     Ok(size)
@@ -489,13 +489,13 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   ) -> impl FnOnce(
     &mut SymInterpreter,
     &'ctx Solver<'ctx>,
-    &mut dyn SymInterpreterContext,
+    &mut dyn SymInterpreterContext<'ctx>,
     AccessPath,
     &FatStructType,
   ) -> VMResult<AbstractMemorySize<GasCarrier>> {
-    |_interpreter, solver, context, ap, struct_ty| {
+    |_interpreter, _solver, context, ap, struct_ty| {
       let size = resource.size();
-      context.move_resource_to(solver, &ap, struct_ty, resource)?;
+      context.move_resource_to(&ap, struct_ty, resource)?;
       Ok(size)
     }
   }
@@ -503,14 +503,14 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// MoveToSender opcode.
   fn move_to_sender(
     &mut self,
-    solver: &'ctx Solver<'ctx>,
-    context: &mut dyn SymInterpreterContext,
+    _solver: &'ctx Solver<'ctx>,
+    context: &mut dyn SymInterpreterContext<'ctx>,
     ap: AccessPath,
     struct_ty: &FatStructType,
   ) -> VMResult<AbstractMemorySize<GasCarrier>> {
     let resource = self.operand_stack.pop_as::<SymStruct>()?;
     let size = resource.size();
-    context.move_resource_to(solver, &ap, struct_ty, resource)?;
+    context.move_resource_to(&ap, struct_ty, resource)?;
     Ok(size)
   }
 
@@ -708,7 +708,7 @@ impl<'ctx> SymStack<'ctx> {
   /// type or if the stack is empty.
   fn pop_as<T>(&mut self) -> VMResult<T>
   where
-    SymValue<'ctx>: VMValueCast<T>,
+    SymValue<'ctx>: VMSymValueCast<T>,
   {
     self.pop()?.value_as()
   }
@@ -795,7 +795,7 @@ impl<'ctx> SymFrame<'ctx> {
     solver: &'ctx Solver<'ctx>,
     resolver: &Resolver,
     interpreter: &mut SymInterpreter<'_, 'ctx>,
-    context: &mut dyn SymInterpreterContext,
+    context: &mut dyn SymInterpreterContext<'ctx>,
   ) -> VMResult<ExitCode<'ctx>> {
     let code = self.function.code();
     loop {
