@@ -1,6 +1,6 @@
 # Movable
 
-A symbolic execution tool for [Move](https://github.com/libra/libra/language), which is a smart contract language designed for [Libra](https://libra.org).
+A symbolic execution tool for [Move](https://github.com/libra/libra/tree/master/language), which is a smart contract language designed for [Libra](https://libra.org).
 
 ## Libra Setup
 
