@@ -1,0 +1,22 @@
+module Test {
+  // pre: true
+  // post: return >= 0
+  public abs(x: u8): u8 {
+    if (copy(x) >= 0) {
+      return move(x);
+    } else {
+      return -move(x);
+    }
+  }5
+
+  // pre: true
+  // post: return == true
+  public f(x: u8): bool {
+    if (copy(x) > 3) {
+      if (Self.abs(move(x)) < 3) {
+        return false;
+      }
+    }
+    return true;
+  }
+}
