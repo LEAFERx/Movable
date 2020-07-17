@@ -20,6 +20,7 @@ use move_vm_types::{
   // gas_schedule::calculate_intrinsic_gas,
   loaded_data::{runtime_types::Type, types::FatStructType},
   transaction_metadata::TransactionMetadata,
+  values::Value,
   // values::{self, SymIntegerValue, SymLocals, SymReference, Struct, StructRef, VMValueCast, SymValue},
 };
 use crate::{
@@ -846,22 +847,22 @@ impl<'ctx> SymFrame<'ctx> {
             interpreter.operand_stack.push(SymValue::from_u128(solver, *int_const))?;
           }
           // !!!
-          // Bytecode::LdConst(idx) => {
-          //   let constant = resolver.constant_at(*idx);
-          //   // gas!(
-          //   //   instr: context,
-          //   //   interpreter,
-          //   //   Opcodes::LD_CONST,
-          //   //   AbstractMemorySize::new(constant.data.len() as GasCarrier)
-          //   // )?;
-          //   interpreter
-          //     .operand_stack
-          //     .push(SymValue::deserialize_constant(constant).ok_or_else(|| {
-          //       VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
-          //         "Verifier failed to verify the deserialization of constants".to_owned(),
-          //       )
-          //     })?)?
-          // }
+          Bytecode::LdConst(idx) => {
+            let constant = resolver.constant_at(*idx);
+            // gas!(
+            //   instr: context,
+            //   interpreter,
+            //   Opcodes::LD_CONST,
+            //   AbstractMemorySize::new(constant.data.len() as GasCarrier)
+            // )?;
+            interpreter
+              .operand_stack
+              .push(SymValue::deserialize_constant(solver, constant).ok_or_else(|| {
+                VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
+                  "Verifier failed to verify the deserialization of constants".to_owned(),
+                )
+              })?)?
+          }
           Bytecode::LdTrue => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_TRUE)?;
             interpreter.operand_stack.push(SymValue::from_bool(solver, true))?;

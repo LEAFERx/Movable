@@ -8,7 +8,7 @@ use libra_types::{
   vm_error::{
     // sub_status::NFE_VECTOR_ERROR_BASE,
     StatusCode,
-    VMStatus
+    VMStatus,
   },
 };
 use move_core_types::gas_schedule::{
@@ -16,7 +16,7 @@ use move_core_types::gas_schedule::{
 };
 use move_vm_types::{
   loaded_data::types::{FatStructType, FatType},
-  values::{Struct, Value, VMValueCast},
+  values::{Struct, VMValueCast, Value},
 };
 use std::{
   cell::{Ref, RefCell, RefMut},
@@ -29,19 +29,16 @@ use std::{
 };
 use vm::{
   errors::*,
-  file_format::{
-    //Constant,
-    SignatureToken
-  },
+  file_format::{Constant, SignatureToken},
 };
 
 use z3::ast::Dynamic;
 
-use solver::Solver;
 use crate::types::values::{
   account_address::SymAccountAddress,
   primitives::{SymBool, SymU128, SymU64, SymU8},
 };
+use solver::Solver;
 
 /***************************************************************************************
 *
@@ -252,10 +249,12 @@ impl<'ctx> SymValue<'ctx> {
       (SignatureToken::U128, SymValueImpl::U128(_)) => true,
       (SignatureToken::Bool, SymValueImpl::Bool(_)) => true,
       (SignatureToken::Address, SymValueImpl::Address(_)) => true,
-      (SignatureToken::Vector(ty), SymValueImpl::Container(r)) => match (&**ty, &(*r.borrow()).container) {
-        (SignatureToken::U8, SymContainerImpl::U8(_)) => true,
-        _ => false,
-      },
+      (SignatureToken::Vector(ty), SymValueImpl::Container(r)) => {
+        match (&**ty, &(*r.borrow()).container) {
+          (SignatureToken::U8, SymContainerImpl::U8(_)) => true,
+          _ => false,
+        }
+      }
       _ => false,
     }
   }
@@ -564,17 +563,31 @@ impl<'ctx> SymIndexedRef<'ctx> {
       (Bool(v1), Bool(v2)) => v1[self.idx].equals(&v2[other.idx])?,
 
       // Equality between a generic and a specialized container.
-      (General(v1), U8(v2)) => v1[self.idx].as_value_ref::<SymU8<'ctx>>()?.equals(&v2[other.idx])?,
+      (General(v1), U8(v2)) => v1[self.idx]
+        .as_value_ref::<SymU8<'ctx>>()?
+        .equals(&v2[other.idx])?,
       (U8(v1), General(v2)) => v1[self.idx].equals(v2[other.idx].as_value_ref::<SymU8<'ctx>>()?)?,
 
-      (General(v1), U64(v2)) => v1[self.idx].as_value_ref::<SymU64<'ctx>>()?.equals(&v2[other.idx])?,
-      (U64(v1), General(v2)) => v1[self.idx].equals(v2[other.idx].as_value_ref::<SymU64<'ctx>>()?)?,
+      (General(v1), U64(v2)) => v1[self.idx]
+        .as_value_ref::<SymU64<'ctx>>()?
+        .equals(&v2[other.idx])?,
+      (U64(v1), General(v2)) => {
+        v1[self.idx].equals(v2[other.idx].as_value_ref::<SymU64<'ctx>>()?)?
+      }
 
-      (General(v1), U128(v2)) => v1[self.idx].as_value_ref::<SymU128<'ctx>>()?.equals(&v2[other.idx])?,
-      (U128(v1), General(v2)) => v1[self.idx].equals(v2[other.idx].as_value_ref::<SymU128<'ctx>>()?)?,
+      (General(v1), U128(v2)) => v1[self.idx]
+        .as_value_ref::<SymU128<'ctx>>()?
+        .equals(&v2[other.idx])?,
+      (U128(v1), General(v2)) => {
+        v1[self.idx].equals(v2[other.idx].as_value_ref::<SymU128<'ctx>>()?)?
+      }
 
-      (General(v1), Bool(v2)) => v1[self.idx].as_value_ref::<SymBool<'ctx>>()?.equals(&v2[other.idx])?,
-      (Bool(v1), General(v2)) => v1[self.idx].equals(v2[other.idx].as_value_ref::<SymBool<'ctx>>()?)?,
+      (General(v1), Bool(v2)) => v1[self.idx]
+        .as_value_ref::<SymBool<'ctx>>()?
+        .equals(&v2[other.idx])?,
+      (Bool(v1), General(v2)) => {
+        v1[self.idx].equals(v2[other.idx].as_value_ref::<SymBool<'ctx>>()?)?
+      }
 
       // All other combinations are illegal.
       _ => {
@@ -604,7 +617,9 @@ impl<'ctx> SymValue<'ctx> {
 
 impl<'ctx> SymContainerRef<'ctx> {
   fn read_ref(self) -> VMResult<SymValue<'ctx>> {
-    Ok(SymValue(SymValueImpl::new_container(self.borrow().copy_value())))
+    Ok(SymValue(SymValueImpl::new_container(
+      self.borrow().copy_value(),
+    )))
   }
 }
 
@@ -924,7 +939,11 @@ impl<'ctx> SymLocals<'ctx> {
 *
 **************************************************************************************/
 impl<'ctx> SymValue<'ctx> {
-  pub fn from_deserialized_value(solver: &'ctx Solver<'ctx>, value: Value, ty: &FatType) -> VMResult<Self> {
+  pub fn from_deserialized_value(
+    solver: &'ctx Solver<'ctx>,
+    value: Value,
+    ty: &FatType,
+  ) -> VMResult<Self> {
     match ty {
       FatType::Bool => Ok(SymValue::from_bool(solver, value.value_as()?)),
       FatType::U8 => Ok(SymValue::from_u8(solver, value.value_as()?)),
@@ -933,13 +952,17 @@ impl<'ctx> SymValue<'ctx> {
       FatType::Address => Ok(SymValue::from_address(solver, value.value_as()?)),
       FatType::Signer => Ok(SymValue::from_signer(solver, value.value_as()?)),
       FatType::Vector(_) => unimplemented!(),
-      FatType::Struct(struct_type) => Ok(SymValue::from_deserialized_struct(solver, VMValueCast::cast(value)?, struct_type)?),
-      FatType::Reference(_) | FatType::MutableReference(_) | FatType::TyParam(_) => {
-        Err(
-          VMStatus::new(StatusCode::INVALID_DATA)
-            .with_message(format!("Such type {:?} is not possibly from deserialzed!", ty))
-        )
-      }
+      FatType::Struct(struct_type) => Ok(SymValue::from_deserialized_struct(
+        solver,
+        VMValueCast::cast(value)?,
+        struct_type,
+      )?),
+      FatType::Reference(_) | FatType::MutableReference(_) | FatType::TyParam(_) => Err(
+        VMStatus::new(StatusCode::INVALID_DATA).with_message(format!(
+          "Such type {:?} is not possibly from deserialzed!",
+          ty
+        )),
+      ),
     }
   }
 
@@ -1002,17 +1025,20 @@ impl<'ctx> SymValue<'ctx> {
   }
 
   pub fn from_signer(solver: &'ctx Solver, signer: AccountAddress) -> Self {
-    SymValue(SymValueImpl::Signer(SymAccountAddress::new(
-      solver, signer,
-    )))
+    SymValue(SymValueImpl::Signer(SymAccountAddress::new(solver, signer)))
   }
 
   pub fn from_sym_signer(signer: SymAccountAddress<'ctx>) -> Self {
     SymValue(SymValueImpl::Signer(signer))
   }
 
-  pub fn from_deserialized_struct(solver: &'ctx Solver<'ctx>, s: Struct, ty: &FatStructType) -> VMResult<Self> {
-    let fields: Vec<SymValue> = s.unpack()?
+  pub fn from_deserialized_struct(
+    solver: &'ctx Solver<'ctx>,
+    s: Struct,
+    ty: &FatStructType,
+  ) -> VMResult<Self> {
+    let fields: Vec<SymValue> = s
+      .unpack()?
       .into_iter()
       .enumerate()
       .map(|(idx, v)| SymValue::from_deserialized_value(solver, v, &ty.layout[idx]))
@@ -1936,9 +1962,7 @@ impl<'ctx> SymStruct<'ctx> {
   pub fn pack<I: IntoIterator<Item = SymValue<'ctx>>>(solver: &'ctx Solver<'ctx>, vals: I) -> Self {
     Self(SymContainer {
       solver,
-      container: SymContainerImpl::General(
-        vals.into_iter().map(|v| v.0).collect(),
-      ),
+      container: SymContainerImpl::General(vals.into_iter().map(|v| v.0).collect()),
     })
   }
 
@@ -1983,10 +2007,12 @@ impl<'ctx> SymGlobalValue<'ctx> {
   }
 
   pub fn borrow_global(&self) -> VMResult<SymValue<'ctx>> {
-    Ok(SymValue(SymValueImpl::ContainerRef(SymContainerRef::Global {
-      status: Rc::clone(&self.status),
-      container: Rc::clone(&self.container),
-    })))
+    Ok(SymValue(SymValueImpl::ContainerRef(
+      SymContainerRef::Global {
+        status: Rc::clone(&self.status),
+        container: Rc::clone(&self.container),
+      },
+    )))
   }
 
   pub fn mark_dirty(&self) -> VMResult<()> {
@@ -2374,3 +2400,43 @@ impl<'ctx> Display for SymLocals<'ctx> {
 //     Ok(NativeResult::ok(ZERO_GAS_UNITS, vec![]))
 //   }
 // }
+
+/***************************************************************************************
+*
+* Constants
+*
+*   Implementation of deseserialization of constant data into a runtime value
+*
+**************************************************************************************/
+
+impl<'ctx> SymValue<'ctx> {
+  fn constant_sig_token_to_type(constant_signature: &SignatureToken) -> Option<FatType> {
+    use FatType as T;
+    use SignatureToken as S;
+    Some(match constant_signature {
+      S::Bool => T::Bool,
+      S::U8 => T::U8,
+      S::U64 => T::U64,
+      S::U128 => T::U128,
+      S::Address => T::Address,
+      S::Signer => T::Signer,
+      S::Vector(inner) => T::Vector(Box::new(Self::constant_sig_token_to_type(inner)?)),
+      // Not yet supported
+      S::Struct(_) | S::StructInstantiation(_, _) => return None,
+      // Not allowed/Not meaningful
+      S::TypeParameter(_) | S::Reference(_) | S::MutableReference(_) => return None,
+    })
+  }
+
+  pub fn deserialize_constant(solver: &'ctx Solver<'ctx>, constant: &Constant) -> Option<SymValue<'ctx>> {
+    let ty = Self::constant_sig_token_to_type(&constant.type_)?;
+    let v = Value::simple_deserialize(&constant.data, &ty).ok()?;
+    SymValue::from_deserialized_value(solver, v, &ty).ok()
+  }
+
+  // pub fn serialize_constant(type_: SignatureToken, value: Value) -> Option<Constant> {
+  //   let ty = Self::constant_sig_token_to_type(&type_)?;
+  //   let data = value.simple_serialize(&ty)?;
+  //   Some(Constant { data, type_ })
+  // }
+}
