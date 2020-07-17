@@ -42,7 +42,7 @@ cargo run <BYTECODE_FILE> -f <FUNCTION_NAME>
 - Docking with plugin system
 - Gas infrastructure
 - Debug and log infrastructure
-- Code rewrite
+- Code rewrite to avoid endless `fork`
 
 ### Plugin System
 
