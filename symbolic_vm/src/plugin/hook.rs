@@ -1,17 +1,19 @@
-use crate::types::interpreter_context::SymInterpreterContext;
+use crate::types::{interpreter_context::SymInterpreterContext, values::SymValue};
 use crate::{
-    engine::solver::Solver,
-    loader::{Function, Loader, Resolver},
-    symbolic_vm::{interpreter::SymInterpreter, runtime::SymVMRuntime, types::value::SymValue},
+    runtime::interpreter::SymInterpreter,
+    runtime::loader::{Function, Loader, Resolver},
 };
+use libra_types::vm_error::{sub_status, VMStatus};
 use nix::unistd::{fork, ForkResult};
 use solver::Solver;
 use std::{clone::Clone, marker::PhantomData, process::exit, sync::Arc};
 use vm::errors::VMResult;
 use vm::file_format::{CodeOffset, FunctionHandleIndex, FunctionInstantiationIndex};
 use z3::ast::Dynamic;
-use z3::{ast, Context as Z3Context, Model as Z3Model, SatResult, Solver as Z3Solver};
-
+use z3::{
+    ast::Bool, ast::Int, ast::BV, Context as Z3Context, Model as Z3Model, SatResult,
+    Solver as Z3Solver,
+};
 /***************************************************************************************
 *
 * Plugin Manager
@@ -21,34 +23,35 @@ use z3::{ast, Context as Z3Context, Model as Z3Model, SatResult, Solver as Z3Sol
 *
 **************************************************************************************/
 
-enum PluginError<'ctx> {
+enum PluginError {
     Return,
     Call(FunctionHandleIndex),
     CallGeneric(FunctionInstantiationIndex),
-    Branch(bool, SymBool<'ctx>, CodeOffset),
 }
 
 /***************************************************************************************
 *
-* Execution Plugin
+*  Execution Function Plugin
 *
-*   trait
-*   and transaction check.
+*  The user provide the pre and post condition, and it check the post will satisfy the pre condidtion
+*  after the exection.
 *
 **************************************************************************************/
 
 pub struct ExecutionPlugin<'ctx> {
     pre: &'ctx Z3Context,
     post: &'ctx Z3Context,
-    solver: Z3Solver<'ctx>,
+    presolver: Z3Solver<'ctx>,
+    postsolver: Z3Solver<'ctx>,
 }
 
 impl<'ctx> ExecutionPlugin<'ctx> {
-    fn new(ctx: &'ctx Z3Context) -> Self {
+    fn new(pre: &'ctx Z3Context, post: &'ctx Z3Context) -> Self {
         ExecutionPlugin {
             pre,
             post,
-            solver: Z3Solver::new(ctx),
+            presolver: Z3Solver::new(pre),
+            postsolver: Z3Solver::new(pre),
         }
     }
     pub fn pre(&self) -> &'ctx Z3Context {
@@ -58,24 +61,23 @@ impl<'ctx> ExecutionPlugin<'ctx> {
         self.post
     }
     pub fn assert(&self, cond: &Bool<'ctx>) {
-        self.solver.assert(cond);
+        self.presolver.assert(cond);
     }
     pub fn check(&self) -> SatResult {
-        self.solver.check()
+        self.presolver.check()
     }
     pub fn get_model(&self) -> Z3Model {
-        self.solver.get_model()
+        self.presolver.get_model()
     }
-    pub fn ExecutionPluginHook(
+    fn ExecutionPluginHook(
         &mut self,
-        solver: &'ctx Solver<'ctx>,
+        solver: &'ctx Solver,
         interpreter: &mut SymInterpreter<'_, 'ctx>,
         context: &mut dyn SymInterpreterContext<'ctx>,
-    ) -> VMResult<PluginError<'ctx>> {
-        let first_value = ast::Int::new_const;
-        let mut handle = ast::BV::bvadd_no_overflow();
+    ) -> VMResult<()> {
+        
+        Ok(())
     }
-
 }
 
 /***************************************************************************************
@@ -92,10 +94,10 @@ pub struct SingleInstrPlugin<'ctx> {
 }
 
 impl<'ctx> SingleInstrPlugin<'ctx> {
-    fn new(ctx: &'ctx Z3Context) -> Self {
+    fn new(singleInstr: &'ctx Z3Context) -> Self {
         SingleInstrPlugin {
             singleInstr,
-            solver: Z3Solver::new(ctx),
+            solver: Z3Solver::new(singleInstr),
         }
     }
     pub fn singleInstr(&self) -> &'ctx Z3Context {
@@ -110,14 +112,140 @@ impl<'ctx> SingleInstrPlugin<'ctx> {
     pub fn get_model(&self) -> Z3Model {
         self.solver.get_model()
     }
-    pub fn PluginAddHook(
+    pub fn PluginAddOverFlowHook(
         &mut self,
-        solver: &'ctx Solver<'ctx>,
-        first_value: &mut Z3Context,
-        context: &mut dyn SymInterpreterContext<'ctx>,
-    ) -> VMResult<PluginError<'ctx>> {
-        let first_value = ast::Int::new_const;
-        let mut handle = ast::BV::bvadd_no_overflow();
+        solver: &'ctx Z3Solver<'ctx>,
+        first_value: &mut Int,
+        second_value: &mut Int,
+        size_of_int: u32,
+        sign_or_not: bool,
+    ) -> VMResult<()> {
+        let mut msg = String::from("\n------------PluginAddHook------------\n");
+        let x = BV::from_int(&first_value, size_of_int);
+        let y = BV::from_int(&second_value, size_of_int);
+        let handle = BV::bvadd_no_overflow(&x, &y, sign_or_not);
+        solver.push();
+        solver.assert(&handle);
+        if solver.check() == SatResult::Unsat {
+            msg += &format!("Add overflow! exit.\n");
+            print!("{}", msg);
+            exit(0);
+        }
+        
+        let reverse_handle = BV::bvadd_no_overflow(&x, &y, sign_or_not);
+        solver.push();
+        solver.assert(&reverse_handle);
+        if solver.check() != SatResult::Sat {
+            msg += &format!("Add overflow! exit.\n");
+            print!("{}", msg);
+            exit(0);
+        }
+        solver.pop(1);
+        msg += "-------------------------------------\n";
+        print!("{}", msg);
+        Ok(())
+    }
+
+    pub fn PluginAddUnderFlowHook(
+        &mut self,
+        solver: &'ctx Z3Solver<'ctx>,
+        first_value: &mut Int,
+        second_value: &mut Int,
+        size_of_int: u32,
+    ) -> VMResult<()> {
+        let mut msg = String::from("\n------------PluginAddHook------------\n");
+        let x = BV::from_int(&first_value, size_of_int);
+        let y = BV::from_int(&second_value, size_of_int);
+        let handle = BV::bvadd_no_underflow(&x, &y);
+        solver.push();
+        
+        solver.assert(&handle);
+        if solver.check() == SatResult::Unsat {
+            msg += &format!("Add underflow! exit.\n");
+            print!("{}", msg);
+            exit(0);
+        }
+        solver.pop(1);
+        let reverse_handle = BV::bvadd_no_underflow(&x, &y);
+        solver.push();
+        solver.assert(&reverse_handle);
+        if solver.check() != SatResult::Sat {
+            msg += &format!("Add underflow! exit.\n");
+            print!("{}", msg);
+            exit(0);
+        }
+        solver.pop(1);
+        msg += "-------------------------------------\n";
+        print!("{}", msg);
+        Ok(())
+    }
+
+    pub fn PluginSubOverFlowHook(
+        &mut self,
+        solver: &'ctx Z3Solver<'ctx>,
+        first_value: &mut Int,
+        second_value: &mut Int,
+        size_of_int: u32,
+    ) -> VMResult<()> {
+        let mut msg = String::from("\n------------PluginAddHook------------\n");
+        let x = BV::from_int(&first_value, size_of_int);
+        let y = BV::from_int(&second_value, size_of_int);
+        let handle = BV::bvsub_no_overflow(&x, &y);
+        solver.push();
+        solver.assert(&handle);
+
+        if solver.check() == SatResult::Unsat {
+            msg += &format!("Sub overflow! exit.\n");
+            print!("{}", msg);
+            exit(0);
+        }
+        solver.pop(1);
+        let reverse_handle = BV::bvsub_no_overflow(&x, &y);
+        solver.push();
+        solver.assert(&reverse_handle);
+        if solver.check() != SatResult::Sat {
+            msg += &format!("Sub overflow! exit.\n");
+            print!("{}", msg);
+            exit(0);
+        }
+        solver.pop(1);
+        msg += "-------------------------------------\n";
+        print!("{}", msg);
+        Ok(())
+    }
+    pub fn PluginSubUnderFlowHook(
+        &mut self,
+        solver: &'ctx Z3Solver<'ctx>,
+        first_value: &mut Int,
+        second_value: &mut Int,
+        size_of_int: u32,
+        sign_or_not: bool,
+    ) -> VMResult<()> {
+        let mut msg = String::from("\n------------PluginAddHook------------\n");
+        let x = BV::from_int(&first_value, size_of_int);
+        let y = BV::from_int(&second_value, size_of_int);
+
+        let handle = BV::bvsub_no_underflow(&x, &y, sign_or_not);
+        solver.push();
+        solver.assert(&handle);
+
+        if solver.check() == SatResult::Unsat {
+            msg += &format!("Sub underflow! exit.\n");
+            print!("{}", msg);
+            exit(0);
+        }
+        solver.pop(1);
+        let reverse_handle = BV::bvsub_no_underflow(&x, &y, sign_or_not);
+        solver.push();
+        solver.assert(&reverse_handle);
+        if solver.check() != SatResult::Sat {
+            msg += &format!("Sub underflow! exit.\n");
+            print!("{}", msg);
+            exit(0);
+        }
+        solver.pop(1);
+        msg += "-------------------------------------\n";
+        print!("{}", msg);
+        Ok(())
     }
 }
-
