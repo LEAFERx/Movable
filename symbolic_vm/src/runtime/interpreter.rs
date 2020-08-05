@@ -15,12 +15,12 @@ use libra_types::{
   // transaction::MAX_TRANSACTION_SIZE_IN_BYTES,
   vm_error::{StatusCode, StatusType, VMStatus},
 };
-use move_core_types::gas_schedule::{AbstractMemorySize, CostTable, /* GasAlgebra, */ GasCarrier};
+use move_core_types::gas_schedule::{AbstractMemorySize, /* CostTable, GasAlgebra, */ GasCarrier};
 use move_vm_types::{
   // gas_schedule::calculate_intrinsic_gas,
   loaded_data::{runtime_types::Type, types::FatStructType},
   transaction_metadata::TransactionMetadata,
-  values::Value,
+  // values::Value,
   // values::{self, SymIntegerValue, SymLocals, SymReference, Struct, StructRef, VMValueCast, SymValue},
 };
 use crate::{
@@ -31,6 +31,10 @@ use crate::{
     },
     interpreter_context::SymInterpreterContext,
   },
+  plugin::{
+    IntegerArithmeticPlugin,
+    PluginManager,
+  }
 };
 
 use z3::{SatResult};
@@ -42,19 +46,19 @@ use std::{
   // collections::VecDeque,
   // fmt::Write,
   sync::Arc,
-  marker::PhantomData,
+  // marker::PhantomData,
   process::exit,
 };
 use vm::{
   errors::*,
   file_format::{
-    Bytecode, CodeOffset, FunctionHandleIndex, FunctionInstantiationIndex, StructDefInstantiationIndex,
+    Bytecode, CodeOffset, FunctionHandleIndex, // FunctionInstantiationIndex, StructDefInstantiationIndex,
     StructDefinitionIndex,
   },
   // file_format_common::Opcodes,
 };
 
-use solver::Solver;
+use z3::Solver;
 
 // macro_rules! debug_write {
 //   ($($toks: tt)*) => {
@@ -81,9 +85,11 @@ use solver::Solver;
 /// The `Interpreter` receives a reference to a data store used by certain opcodes
 /// to do operations on data on chain and a `TransactionMetadata` which is also used to resolve
 /// specific opcodes.
-pub(crate) struct SymInterpreter<'vtxn, 'ctx> {
+
+//??? pub(crate)
+pub struct SymInterpreter<'vtxn, 'ctx> {
   /// Operand stack, where Move `SymValue`s are stored for stack operations.
-  operand_stack: SymStack<'ctx>,
+  pub operand_stack: SymStack<'ctx>, //??? should not be pub
   /// The stack of active functions.
   call_stack: SymCallStack<'ctx>,
   /// Transaction data to resolve special bytecodes (e.g. GetTxnSequenceNumber, GetTxnPublicKey,
@@ -167,8 +173,12 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
     let mut msg = String::from("\n-------------------------\n");
+
+    let int_plugin = IntegerArithmeticPlugin::new();
+    let mut manager = PluginManager::new();
+    manager.add_plugin(int_plugin);
   
-    let mut locals = SymLocals::new(solver, function.local_count());
+    let mut locals = SymLocals::new(solver.get_context(), function.local_count());
     // TODO: assert consistency of args and function formals
     for (i, value) in args.iter().enumerate() {
       locals.store_loc(i, value.copy_value())?;
@@ -178,7 +188,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     loop {
       let resolver = current_frame.resolver(loader);
       let exit_code = current_frame //self
-        .execute_code(solver, &resolver, self, context)
+        .execute_code(solver, &resolver, self, context, &mut manager)
         .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
       match exit_code {
         ExitCode::Return => {
@@ -256,7 +266,6 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             }
           }
         }
-        _ => unimplemented!()
         // ExitCode::CallGeneric(idx) => {
         //   let func_inst = resolver.function_instantiation_at(idx);
         //   // gas!(
@@ -284,7 +293,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
         // }
       }
     }
-
+    solver.check(); //??? avoid unchecked get_model
     let model = solver.get_model();
     msg += "Test Function Arguments\n";
     for (i, v) in args.into_iter().enumerate() {
@@ -304,8 +313,8 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   ///
   /// Native functions do not push a frame at the moment and as such errors from a native
   /// function are incorrectly attributed to the caller.
-  fn make_call_frame(&mut self, solver: &'ctx Solver<'ctx>, func: Arc<Function>, ty_args: Vec<Type>) -> VMResult<SymFrame<'ctx>> {
-    let mut locals = SymLocals::new(solver, func.local_count());
+  fn make_call_frame(&mut self, solver: &'ctx Solver<'ctx>, func: Arc<Function>, _ty_args: Vec<Type>) -> VMResult<SymFrame<'ctx>> {
+    let mut locals = SymLocals::new(solver.get_context(), func.local_count());
     let arg_count = func.arg_count();
     for i in 0..arg_count {
       locals.store_loc(arg_count - i - 1, self.operand_stack.pop()?)?;
@@ -466,7 +475,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     struct_ty: &FatStructType,
   ) -> VMResult<AbstractMemorySize<GasCarrier>> {
     let (exists, mem_size) = context.resource_exists(&ap, struct_ty)?;
-    self.operand_stack.push(SymValue::from_bool(solver, exists))?;
+    self.operand_stack.push(SymValue::from_bool(solver.get_context(), exists))?;
     Ok(mem_size)
   }
 
@@ -678,7 +687,7 @@ const OPERAND_STACK_SIZE_LIMIT: usize = 1024;
 const CALL_STACK_SIZE_LIMIT: usize = 1024;
 
 /// The operand stack.
-struct SymStack<'ctx>(Vec<SymValue<'ctx>>);
+pub struct SymStack<'ctx>(Vec<SymValue<'ctx>>); //??? should not be pub
 
 impl<'ctx> SymStack<'ctx> {
   /// Create a new empty operand stack.
@@ -688,7 +697,7 @@ impl<'ctx> SymStack<'ctx> {
 
   /// Push a `SymValue` on the stack if the max stack size has not been reached. Abort execution
   /// otherwise.
-  fn push(&mut self, value: SymValue<'ctx>) -> VMResult<()> {
+  pub fn push(&mut self, value: SymValue<'ctx>) -> VMResult<()> {
     if self.0.len() < OPERAND_STACK_SIZE_LIMIT {
       self.0.push(value);
       Ok(())
@@ -698,7 +707,7 @@ impl<'ctx> SymStack<'ctx> {
   }
 
   /// Pop a `SymValue` off the stack or abort execution if the stack is empty.
-  fn pop(&mut self) -> VMResult<SymValue<'ctx>> {
+  pub fn pop(&mut self) -> VMResult<SymValue<'ctx>> {
     self
       .0
       .pop()
@@ -707,7 +716,7 @@ impl<'ctx> SymStack<'ctx> {
 
   /// Pop a `SymValue` of a given type off the stack. Abort if the value is not of the given
   /// type or if the stack is empty.
-  fn pop_as<T>(&mut self) -> VMResult<T>
+  pub fn pop_as<T>(&mut self) -> VMResult<T>
   where
     SymValue<'ctx>: VMSymValueCast<T>,
   {
@@ -715,7 +724,7 @@ impl<'ctx> SymStack<'ctx> {
   }
 
   /// Pop n values off the stack.
-  fn popn(&mut self, n: u16) -> VMResult<Vec<SymValue<'ctx>>> {
+  pub fn popn(&mut self, n: u16) -> VMResult<Vec<SymValue<'ctx>>> {
     let remaining_stack_size = self
       .0
       .len()
@@ -767,7 +776,7 @@ struct SymFrame<'ctx> {
 enum ExitCode<'ctx> {
   Return,
   Call(FunctionHandleIndex),
-  CallGeneric(FunctionInstantiationIndex),
+  // CallGeneric(FunctionInstantiationIndex),
   /// A `BrTrue / BrFalse` opcode was found.
   /// BrTrue / BrFalse, condition , offset
   Branch(bool, SymBool<'ctx>, CodeOffset),
@@ -797,12 +806,15 @@ impl<'ctx> SymFrame<'ctx> {
     resolver: &Resolver,
     interpreter: &mut SymInterpreter<'_, 'ctx>,
     context: &mut dyn SymInterpreterContext<'ctx>,
+    manager: &mut PluginManager<'ctx>
   ) -> VMResult<ExitCode<'ctx>> {
     let code = self.function.code();
     loop {
       for instruction in &code[self.pc as usize..] {
         // trace!(self.function.pretty_string(), self.pc, instruction);
         self.pc += 1;
+
+        manager.before_execute_instruction(solver, interpreter, instruction)?;
 
         match instruction {
           Bytecode::Pop => {
@@ -836,15 +848,15 @@ impl<'ctx> SymFrame<'ctx> {
           }
           Bytecode::LdU8(int_const) => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_U8)?;
-            interpreter.operand_stack.push(SymValue::from_u8(solver, *int_const))?;
+            interpreter.operand_stack.push(SymValue::from_u8(solver.get_context(), *int_const))?;
           }
           Bytecode::LdU64(int_const) => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_U64)?;
-            interpreter.operand_stack.push(SymValue::from_u64(solver, *int_const))?;
+            interpreter.operand_stack.push(SymValue::from_u64(solver.get_context(), *int_const))?;
           }
           Bytecode::LdU128(int_const) => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_U128)?;
-            interpreter.operand_stack.push(SymValue::from_u128(solver, *int_const))?;
+            interpreter.operand_stack.push(SymValue::from_u128(solver.get_context(), *int_const))?;
           }
           // !!!
           Bytecode::LdConst(idx) => {
@@ -857,7 +869,7 @@ impl<'ctx> SymFrame<'ctx> {
             // )?;
             interpreter
               .operand_stack
-              .push(SymValue::deserialize_constant(solver, constant).ok_or_else(|| {
+              .push(SymValue::deserialize_constant(solver.get_context(), constant).ok_or_else(|| {
                 VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
                   "Verifier failed to verify the deserialization of constants".to_owned(),
                 )
@@ -865,11 +877,11 @@ impl<'ctx> SymFrame<'ctx> {
           }
           Bytecode::LdTrue => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_TRUE)?;
-            interpreter.operand_stack.push(SymValue::from_bool(solver, true))?;
+            interpreter.operand_stack.push(SymValue::from_bool(solver.get_context(), true))?;
           }
           Bytecode::LdFalse => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_FALSE)?;
-            interpreter.operand_stack.push(SymValue::from_bool(solver, false))?;
+            interpreter.operand_stack.push(SymValue::from_bool(solver.get_context(), false))?;
           }
           Bytecode::CopyLoc(idx) => {
             let local = self.locals.copy_loc(*idx as usize)?;
@@ -941,7 +953,7 @@ impl<'ctx> SymFrame<'ctx> {
             // gas!(instr: context, interpreter, Opcodes::PACK, size)?;
             interpreter
               .operand_stack
-              .push(SymValue::from_sym_struct(SymStruct::pack(solver, args)))?;
+              .push(SymValue::from_sym_struct(SymStruct::pack(solver.get_context(), args)))?;
           }
           // Bytecode::PackGeneric(si_idx) => {
           //   let field_count = resolver.field_instantiation_count(*si_idx);
@@ -1160,11 +1172,11 @@ impl<'ctx> SymFrame<'ctx> {
             // gas!(const_instr: context, interpreter, Opcodes::GET_TXN_SENDER)?;
             interpreter
               .operand_stack
-              .push(SymValue::from_address(solver, interpreter.txn_data.sender()))?;
+              .push(SymValue::from_address(solver.get_context(), interpreter.txn_data.sender()))?;
           }
           Bytecode::MutBorrowGlobal(sd_idx) | Bytecode::ImmBorrowGlobal(sd_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
-            let size = interpreter.global_data_op(
+            let _size = interpreter.global_data_op(
               solver,
               resolver,
               context,
@@ -1198,7 +1210,7 @@ impl<'ctx> SymFrame<'ctx> {
           // }
           Bytecode::Exists(sd_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
-            let size =
+            let _size =
               interpreter.global_data_op(solver, resolver, context, addr, *sd_idx, SymInterpreter::exists)?;
             // gas!(instr: context, interpreter, Opcodes::EXISTS, size)?;
           }
@@ -1216,7 +1228,7 @@ impl<'ctx> SymFrame<'ctx> {
           // }
           Bytecode::MoveFrom(sd_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
-            let size = interpreter.global_data_op(
+            let _size = interpreter.global_data_op(
               solver,
               resolver,
               context,
@@ -1249,7 +1261,7 @@ impl<'ctx> SymFrame<'ctx> {
           // }
           Bytecode::MoveToSender(sd_idx) => {
             let addr = interpreter.txn_data.sender();
-            let size = interpreter.global_data_op(
+            let _size = interpreter.global_data_op(
               solver,
               resolver,
               context,
@@ -1280,7 +1292,7 @@ impl<'ctx> SymFrame<'ctx> {
             let resource = interpreter.operand_stack.pop_as::<SymStruct>()?;
             let signer_reference = interpreter.operand_stack.pop_as::<SymReference>()?;
             let addr = signer_reference.read_ref()?.value_as::<SymAccountAddress>()?.into_address();
-            let size = interpreter.global_data_op(
+            let _size = interpreter.global_data_op(
               solver,
               resolver,
               context,

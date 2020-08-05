@@ -24,7 +24,7 @@ use std::{
   sync::Arc,
 };
 
-use solver::Solver;
+use z3::Solver;
 use crate::{
   types::values::SymValue,
   runtime::loader::Function,
@@ -90,7 +90,7 @@ impl<'ctx> VMRuntime<'ctx> {
     solver: &'ctx Solver<'ctx>,
     context: &mut dyn SymInterpreterContext<'ctx>,
     txn_data: &TransactionMetadata,
-    gas_schedule: &CostTable,
+    _gas_schedule: &CostTable,
     script: Vec<u8>,
     ty_args: Vec<TypeTag>,
     args: Vec<SymValue<'ctx>>,

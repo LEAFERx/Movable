@@ -28,6 +28,5 @@ serde = "1.0"
 serde_json = "1.0"
 z3 = "0.5.1"
 nix = "0.15.0"
-rental = "0.5.4"
 
 engine = { path = "./engine", package = "movable-engine" }

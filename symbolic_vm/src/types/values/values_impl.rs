@@ -38,7 +38,7 @@ use crate::types::values::{
   account_address::SymAccountAddress,
   primitives::{SymBool, SymU128, SymU64, SymU8},
 };
-use solver::Solver;
+use z3::Context;
 
 /***************************************************************************************
 *
@@ -88,7 +88,7 @@ enum SymContainerImpl<'ctx> {
 
 #[derive(Debug)]
 struct SymContainer<'ctx> {
-  solver: &'ctx Solver<'ctx>,
+  context: &'ctx Context,
   container: SymContainerImpl<'ctx>,
 }
 
@@ -394,7 +394,7 @@ impl<'ctx> SymContainerImpl<'ctx> {
 impl<'ctx> SymContainer<'ctx> {
   fn copy_value(&self) -> Self {
     Self {
-      solver: self.solver,
+      context: self.context,
       container: self.container.copy_value(),
     }
   }
@@ -480,9 +480,9 @@ impl<'ctx> SymContainer<'ctx> {
     let res = match (&self.container, &other.container) {
       (General(l), General(r)) => {
         if l.len() != r.len() {
-          return Ok(SymBool::from(self.solver, false));
+          return Ok(SymBool::from(self.context, false));
         }
-        let mut res = SymBool::from(self.solver, true);
+        let mut res = SymBool::from(self.context, true);
         for (v1, v2) in l.iter().zip(r.iter()) {
           res = res.and(&v1.equals(v2)?);
         }
@@ -490,9 +490,9 @@ impl<'ctx> SymContainer<'ctx> {
       }
       (U8(l), U8(r)) => {
         if l.len() != r.len() {
-          return Ok(SymBool::from(self.solver, false));
+          return Ok(SymBool::from(self.context, false));
         }
-        let mut res = SymBool::from(self.solver, true);
+        let mut res = SymBool::from(self.context, true);
         for (v1, v2) in l.iter().zip(r.iter()) {
           res = res.and(&v1.equals(v2)?);
         }
@@ -500,9 +500,9 @@ impl<'ctx> SymContainer<'ctx> {
       }
       (U64(l), U64(r)) => {
         if l.len() != r.len() {
-          return Ok(SymBool::from(self.solver, false));
+          return Ok(SymBool::from(self.context, false));
         }
-        let mut res = SymBool::from(self.solver, true);
+        let mut res = SymBool::from(self.context, true);
         for (v1, v2) in l.iter().zip(r.iter()) {
           res = res.and(&v1.equals(v2)?);
         }
@@ -510,9 +510,9 @@ impl<'ctx> SymContainer<'ctx> {
       }
       (U128(l), U128(r)) => {
         if l.len() != r.len() {
-          return Ok(SymBool::from(self.solver, false));
+          return Ok(SymBool::from(self.context, false));
         }
-        let mut res = SymBool::from(self.solver, true);
+        let mut res = SymBool::from(self.context, true);
         for (v1, v2) in l.iter().zip(r.iter()) {
           res = res.and(&v1.equals(v2)?);
         }
@@ -520,9 +520,9 @@ impl<'ctx> SymContainer<'ctx> {
       }
       (Bool(l), Bool(r)) => {
         if l.len() != r.len() {
-          return Ok(SymBool::from(self.solver, false));
+          return Ok(SymBool::from(self.context, false));
         }
-        let mut res = SymBool::from(self.solver, true);
+        let mut res = SymBool::from(self.context, true);
         for (v1, v2) in l.iter().zip(r.iter()) {
           res = res.and(&v1.equals(v2)?);
         }
@@ -852,9 +852,9 @@ impl<'ctx> SymLocals<'ctx> {
 *
 **************************************************************************************/
 impl<'ctx> SymLocals<'ctx> {
-  pub fn new(solver: &'ctx Solver<'ctx>, n: usize) -> Self {
+  pub fn new(context: &'ctx Context, n: usize) -> Self {
     Self(Rc::new(RefCell::new(SymContainer {
-      solver,
+      context,
       container: SymContainerImpl::General(
         iter::repeat_with(|| SymValueImpl::Invalid)
           .take(n)
@@ -940,20 +940,20 @@ impl<'ctx> SymLocals<'ctx> {
 **************************************************************************************/
 impl<'ctx> SymValue<'ctx> {
   pub fn from_deserialized_value(
-    solver: &'ctx Solver<'ctx>,
+    context: &'ctx Context,
     value: Value,
     ty: &FatType,
   ) -> VMResult<Self> {
     match ty {
-      FatType::Bool => Ok(SymValue::from_bool(solver, value.value_as()?)),
-      FatType::U8 => Ok(SymValue::from_u8(solver, value.value_as()?)),
-      FatType::U64 => Ok(SymValue::from_u64(solver, value.value_as()?)),
-      FatType::U128 => Ok(SymValue::from_u128(solver, value.value_as()?)),
-      FatType::Address => Ok(SymValue::from_address(solver, value.value_as()?)),
-      FatType::Signer => Ok(SymValue::from_signer(solver, value.value_as()?)),
+      FatType::Bool => Ok(SymValue::from_bool(context, value.value_as()?)),
+      FatType::U8 => Ok(SymValue::from_u8(context, value.value_as()?)),
+      FatType::U64 => Ok(SymValue::from_u64(context, value.value_as()?)),
+      FatType::U128 => Ok(SymValue::from_u128(context, value.value_as()?)),
+      FatType::Address => Ok(SymValue::from_address(context, value.value_as()?)),
+      FatType::Signer => Ok(SymValue::from_signer(context, value.value_as()?)),
       FatType::Vector(_) => unimplemented!(),
       FatType::Struct(struct_type) => Ok(SymValue::from_deserialized_struct(
-        solver,
+        context,
         VMValueCast::cast(value)?,
         struct_type,
       )?),
@@ -966,57 +966,57 @@ impl<'ctx> SymValue<'ctx> {
     }
   }
 
-  pub fn from_u8(solver: &'ctx Solver<'ctx>, value: u8) -> Self {
-    SymValue(SymValueImpl::U8(SymU8::from(solver, value)))
+  pub fn from_u8(context: &'ctx Context, value: u8) -> Self {
+    SymValue(SymValueImpl::U8(SymU8::from(context, value)))
   }
 
   pub fn from_sym_u8(sym: SymU8<'ctx>) -> Self {
     SymValue(SymValueImpl::U8(sym))
   }
 
-  pub fn new_u8(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U8(SymU8::new(solver, prefix)))
+  pub fn new_u8(context: &'ctx Context, prefix: &str) -> Self {
+    SymValue(SymValueImpl::U8(SymU8::new(context, prefix)))
   }
 
-  pub fn from_u64(solver: &'ctx Solver<'ctx>, value: u64) -> Self {
-    SymValue(SymValueImpl::U64(SymU64::from(solver, value)))
+  pub fn from_u64(context: &'ctx Context, value: u64) -> Self {
+    SymValue(SymValueImpl::U64(SymU64::from(context, value)))
   }
 
   pub fn from_sym_u64(sym: SymU64<'ctx>) -> Self {
     SymValue(SymValueImpl::U64(sym))
   }
 
-  pub fn new_u64(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U64(SymU64::new(solver, prefix)))
+  pub fn new_u64(context: &'ctx Context, prefix: &str) -> Self {
+    SymValue(SymValueImpl::U64(SymU64::new(context, prefix)))
   }
 
-  pub fn from_u128(solver: &'ctx Solver<'ctx>, value: u128) -> Self {
-    SymValue(SymValueImpl::U128(SymU128::from(solver, value)))
+  pub fn from_u128(context: &'ctx Context, value: u128) -> Self {
+    SymValue(SymValueImpl::U128(SymU128::from(context, value)))
   }
 
   pub fn from_sym_u128(sym: SymU128<'ctx>) -> Self {
     SymValue(SymValueImpl::U128(sym))
   }
 
-  pub fn new_u128(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U128(SymU128::new(solver, prefix)))
+  pub fn new_u128(context: &'ctx Context, prefix: &str) -> Self {
+    SymValue(SymValueImpl::U128(SymU128::new(context, prefix)))
   }
 
-  pub fn from_bool(solver: &'ctx Solver<'ctx>, value: bool) -> Self {
-    SymValue(SymValueImpl::Bool(SymBool::from(solver, value)))
+  pub fn from_bool(context: &'ctx Context, value: bool) -> Self {
+    SymValue(SymValueImpl::Bool(SymBool::from(context, value)))
   }
 
   pub fn from_sym_bool(sym: SymBool<'ctx>) -> Self {
     SymValue(SymValueImpl::Bool(sym))
   }
 
-  pub fn new_bool(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
-    SymValue(SymValueImpl::Bool(SymBool::new(solver, prefix)))
+  pub fn new_bool(context: &'ctx Context, prefix: &str) -> Self {
+    SymValue(SymValueImpl::Bool(SymBool::new(context, prefix)))
   }
 
-  pub fn from_address(solver: &'ctx Solver, address: AccountAddress) -> Self {
+  pub fn from_address(context: &'ctx Context, address: AccountAddress) -> Self {
     SymValue(SymValueImpl::Address(SymAccountAddress::new(
-      solver, address,
+      context, address,
     )))
   }
 
@@ -1024,8 +1024,8 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::Address(address))
   }
 
-  pub fn from_signer(solver: &'ctx Solver, signer: AccountAddress) -> Self {
-    SymValue(SymValueImpl::Signer(SymAccountAddress::new(solver, signer)))
+  pub fn from_signer(context: &'ctx Context, signer: AccountAddress) -> Self {
+    SymValue(SymValueImpl::Signer(SymAccountAddress::new(context, signer)))
   }
 
   pub fn from_sym_signer(signer: SymAccountAddress<'ctx>) -> Self {
@@ -1033,7 +1033,7 @@ impl<'ctx> SymValue<'ctx> {
   }
 
   pub fn from_deserialized_struct(
-    solver: &'ctx Solver<'ctx>,
+    context: &'ctx Context,
     s: Struct,
     ty: &FatStructType,
   ) -> VMResult<Self> {
@@ -1041,9 +1041,9 @@ impl<'ctx> SymValue<'ctx> {
       .unpack()?
       .into_iter()
       .enumerate()
-      .map(|(idx, v)| SymValue::from_deserialized_value(solver, v, &ty.layout[idx]))
+      .map(|(idx, v)| SymValue::from_deserialized_value(context, v, &ty.layout[idx]))
       .collect::<VMResult<_>>()?;
-    Ok(SymValue::from_sym_struct(SymStruct::pack(solver, fields)))
+    Ok(SymValue::from_sym_struct(SymStruct::pack(context, fields)))
   }
 
   pub fn from_sym_struct(s: SymStruct<'ctx>) -> Self {
@@ -1959,9 +1959,9 @@ impl<'ctx> SymGlobalValue<'ctx> {
 *
 **************************************************************************************/
 impl<'ctx> SymStruct<'ctx> {
-  pub fn pack<I: IntoIterator<Item = SymValue<'ctx>>>(solver: &'ctx Solver<'ctx>, vals: I) -> Self {
+  pub fn pack<I: IntoIterator<Item = SymValue<'ctx>>>(context: &'ctx Context, vals: I) -> Self {
     Self(SymContainer {
-      solver,
+      context,
       container: SymContainerImpl::General(vals.into_iter().map(|v| v.0).collect()),
     })
   }
@@ -2428,10 +2428,10 @@ impl<'ctx> SymValue<'ctx> {
     })
   }
 
-  pub fn deserialize_constant(solver: &'ctx Solver<'ctx>, constant: &Constant) -> Option<SymValue<'ctx>> {
+  pub fn deserialize_constant(context: &'ctx Context, constant: &Constant) -> Option<SymValue<'ctx>> {
     let ty = Self::constant_sig_token_to_type(&constant.type_)?;
     let v = Value::simple_deserialize(&constant.data, &ty).ok()?;
-    SymValue::from_deserialized_value(solver, v, &ty).ok()
+    SymValue::from_deserialized_value(context, v, &ty).ok()
   }
 
   // pub fn serialize_constant(type_: SignatureToken, value: Value) -> Option<Constant> {

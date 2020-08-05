@@ -6,7 +6,7 @@ use z3::ast::{Ast, Bool, Dynamic, BV};
 
 use std::fmt;
 
-use solver::Solver;
+use z3::Context;
 
 #[derive(Debug, Clone)]
 pub struct SymU8<'ctx>(BV<'ctx>);
@@ -20,8 +20,8 @@ pub struct SymBool<'ctx>(Bool<'ctx>);
 // Consider to use a macro to do impl
 
 impl<'ctx> SymU8<'ctx> {
-  pub fn from(solver: &'ctx Solver<'ctx>, value: u8) -> Self {
-    SymU8(BV::from_u64(solver.ctx(), value as u64, 8))
+  pub fn from(context: &'ctx Context, value: u8) -> Self {
+    SymU8(BV::from_u64(context, value as u64, 8))
   }
 
   pub fn from_ast(ast: BV<'ctx>) -> Self {
@@ -30,8 +30,8 @@ impl<'ctx> SymU8<'ctx> {
     SymU8(ast)
   }
 
-  pub fn new(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
-    SymU8(BV::fresh_const(solver.ctx(), prefix, 8))
+  pub fn new(context: &'ctx Context, prefix: &str) -> Self {
+    SymU8(BV::fresh_const(context, prefix, 8))
   }
 
   pub fn cast_u64(self) -> SymU64<'ctx> {
@@ -113,8 +113,8 @@ impl<'ctx> SymU8<'ctx> {
 }
 
 impl<'ctx> SymU64<'ctx> {
-  pub fn from(solver: &'ctx Solver<'ctx>, value: u64) -> Self {
-    SymU64(BV::from_u64(solver.ctx(), value, 64))
+  pub fn from(context: &'ctx Context, value: u64) -> Self {
+    SymU64(BV::from_u64(context, value, 64))
   }
 
   pub fn from_ast(ast: BV<'ctx>) -> Self {
@@ -123,8 +123,8 @@ impl<'ctx> SymU64<'ctx> {
     SymU64(ast)
   }
 
-  pub fn new(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
-    SymU64(BV::fresh_const(solver.ctx(), prefix, 64))
+  pub fn new(context: &'ctx Context, prefix: &str) -> Self {
+    SymU64(BV::fresh_const(context, prefix, 64))
   }
 
   pub fn cast_u8(self) -> SymU8<'ctx> {
@@ -205,8 +205,8 @@ impl<'ctx> SymU64<'ctx> {
 }
 
 impl<'ctx> SymU128<'ctx> {
-  pub fn from(solver: &'ctx Solver<'ctx>, value: u128) -> Self {
-    let ctx = solver.ctx();
+  pub fn from(context: &'ctx Context, value: u128) -> Self {
+    let ctx = context;
     let x =
       BV::from_u64(ctx, (value >> 64) as u64, 64).concat(&BV::from_u64(ctx, value as u64, 64));
     SymU128(x)
@@ -218,8 +218,8 @@ impl<'ctx> SymU128<'ctx> {
     SymU128(ast)
   }
 
-  pub fn new(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
-    SymU128(BV::fresh_const(solver.ctx(), prefix, 128))
+  pub fn new(context: &'ctx Context, prefix: &str) -> Self {
+    SymU128(BV::fresh_const(context, prefix, 128))
   }
 
   pub fn cast_u8(self) -> SymU8<'ctx> {
@@ -300,16 +300,16 @@ impl<'ctx> SymU128<'ctx> {
 }
 
 impl<'ctx> SymBool<'ctx> {
-  pub fn from(solver: &'ctx Solver<'ctx>, value: bool) -> Self {
-    SymBool(Bool::from_bool(solver.ctx(), value))
+  pub fn from(context: &'ctx Context, value: bool) -> Self {
+    SymBool(Bool::from_bool(context, value))
   }
 
   pub fn from_ast(ast: Bool<'ctx>) -> Self {
     SymBool(ast)
   }
 
-  pub fn new(solver: &'ctx Solver<'ctx>, prefix: &str) -> Self {
-    SymBool(Bool::fresh_const(solver.ctx(), prefix))
+  pub fn new(context: &'ctx Context, prefix: &str) -> Self {
+    SymBool(Bool::fresh_const(context, prefix))
   }
 
   pub fn as_inner(&self) -> &Bool<'ctx> {

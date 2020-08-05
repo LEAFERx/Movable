@@ -8,9 +8,9 @@ use move_vm_types::{
   transaction_metadata::TransactionMetadata,
 };
 use crate::types::chain_state::SymChainState;
-use libra_types::{
-  vm_error::{StatusCode, VMStatus},
-};
+// use libra_types::{
+//   vm_error::{StatusCode, VMStatus},
+// };
 use vm::{
   errors::VMResult,
   file_format::{
@@ -18,7 +18,7 @@ use vm::{
   },
 };
 
-use solver::Solver;
+use z3::Solver;
 use crate::types::values::SymValue;
 
 pub struct SymbolicVM<'ctx> {
@@ -108,10 +108,10 @@ fn construct_symbolic_args<'ctx, S: SymChainState<'ctx>>(
   let prefix = "TestFuncArgs";
   for sig in func.parameters().0.clone() {
     let val = match sig {
-      SignatureToken::Bool => SymValue::new_bool(solver, prefix),
-      SignatureToken::U8 => SymValue::new_u8(solver, prefix),
-      SignatureToken::U64 => SymValue::new_u64(solver, prefix),
-      SignatureToken::U128 => SymValue::new_u128(solver, prefix),
+      SignatureToken::Bool => SymValue::new_bool(solver.get_context(), prefix),
+      SignatureToken::U8 => SymValue::new_u8(solver.get_context(), prefix),
+      SignatureToken::U64 => SymValue::new_u64(solver.get_context(), prefix),
+      SignatureToken::U128 => SymValue::new_u128(solver.get_context(), prefix),
       _ => unimplemented!(),
     };
     args.push(val);

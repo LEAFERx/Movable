@@ -1,22 +1,22 @@
-use libra_logger::prelude::*;
-use libra_state_view::StateView;
+// use libra_logger::prelude::*;
+// use libra_state_view::StateView;
 use libra_types::{
   access_path::AccessPath,
-  on_chain_config::ConfigStorage,
+  // on_chain_config::ConfigStorage,
   vm_error::{StatusCode, VMStatus},
-  write_set::{WriteOp, WriteSet, WriteSetMut},
+  // write_set::{WriteOp, WriteSet, WriteSetMut},
 };
 use move_core_types::language_storage::ModuleId;
 use move_vm_types::{
   loaded_data::types::FatStructType,
   values::{Struct},
 };
-use symbolic_vm::types::values::{SymGlobalValue, SymStruct, SymValue};
+use symbolic_vm::types::values::{SymGlobalValue, /* SymStruct, */ SymValue};
 use move_vm_state::data_cache::RemoteCache;
-use std::{collections::btree_map::BTreeMap, mem::replace};
+use std::{collections::btree_map::BTreeMap, /* mem::replace */};
 use vm::errors::*;
 
-use solver::Solver;
+use z3::Solver;
 
 pub struct SymbolicExecutionDataCache<'vtxn, 'ctx> {
   solver: &'ctx Solver<'ctx>,
@@ -86,7 +86,7 @@ impl<'txn, 'ctx> SymbolicExecutionDataCache<'txn, 'ctx> {
       match self.data_cache.get(ap)? {
         Some(bytes) => {
           let res = Struct::simple_deserialize(&bytes, ty)?;
-          let gr = SymGlobalValue::new(SymValue::from_deserialized_struct(self.solver, res, ty)?)?;
+          let gr = SymGlobalValue::new(SymValue::from_deserialized_struct(self.solver.get_context(), res, ty)?)?;
           self.data_map.insert(ap.clone(), Some((ty.clone(), gr)));
         }
         None => {

@@ -15,17 +15,29 @@ impl<'ctx> Solver<'ctx> {
             solver: Z3Solver::new(ctx),
         }
     }
+
     pub fn ctx(&self) -> &'ctx Z3Context {
         self.ctx
     }
+
     pub fn assert(&self, cond: &Bool<'ctx>) {
         self.solver.assert(cond);
     }
+
     pub fn check(&self) -> SatResult {
         self.solver.check()
     }
+
     pub fn get_model(&self) -> Z3Model {
         self.solver.get_model()
+    }
+
+    pub fn push(&self) {
+        self.solver.push();
+    }
+
+    pub fn pop(&self, n: u32) {
+        self.solver.pop(n);
     }
 }
 

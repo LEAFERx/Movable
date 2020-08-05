@@ -15,8 +15,6 @@ use move_core_types::{
 };
 use vm::errors::*;
 
-use solver::Solver;
-
 /// The `InterpreterContext` context trait specifies the mutations that are allowed to the
 /// `TransactionExecutionContext` within the interpreter.
 pub trait SymInterpreterContext<'ctx> {

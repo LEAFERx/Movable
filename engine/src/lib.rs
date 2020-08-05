@@ -6,14 +6,14 @@ use move_core_types::{
   identifier::IdentStr,
   language_storage::ModuleId,
 };
-use move_vm_state::{data_cache::BlockDataCache, execution_context::TransactionExecutionContext};
+use move_vm_state::{data_cache::BlockDataCache};
 use move_vm_types::transaction_metadata::TransactionMetadata;
 use vm::CompiledModule;
 
 use serde::{Deserialize, Serialize};
 use z3::{Config, Context};
 
-use solver::Solver;
+use z3::Solver;
 use symbolic_vm::runtime::vm::SymbolicVM;
 use symbolic_chain_state::execution_context::SymbolicExecutionContext;
 

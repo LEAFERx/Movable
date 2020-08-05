@@ -29,5 +29,4 @@ serde_json = "1.0"
 z3 = "0.5.1"
 nix = "0.15.0"
 
-solver = { path = "../solver", package = "movable-solver" }
 symbolic-vm = { path = "../symbolic_vm", package = "movable-symbolic-vm" }

@@ -7,8 +7,6 @@ use move_core_types::{
 };
 use vm::errors::VMResult;
 
-use solver::Solver;
-
 /// Trait that describes what Move bytecode runtime expects from the Libra blockchain.
 pub trait SymChainState<'ctx> {
   // ---

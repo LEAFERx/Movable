@@ -1,6 +1,6 @@
-use libra_types::{
-  transaction::Module,
-};
+// use libra_types::{
+//   transaction::Module,
+// };
 use move_core_types::identifier::IdentStr;
 use vm::{
   CompiledModule,
@@ -8,7 +8,7 @@ use vm::{
 
 use std::{
   fs,
-  io::BufReader,
+  // io::BufReader,
   path::{Path, PathBuf},
 };
 use structopt::StructOpt;

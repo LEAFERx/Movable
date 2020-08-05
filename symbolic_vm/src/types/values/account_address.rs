@@ -6,23 +6,23 @@ use libra_types::{
   vm_error::{StatusCode, VMStatus},
 };
 
-use solver::Solver;
+use z3::Context;
 use crate::types::values::{
   primitives::SymBool,
 };
 
 #[derive(Debug, Clone)]
 pub struct SymAccountAddress<'ctx> {
-  solver: &'ctx Solver<'ctx>,
+  context: &'ctx Context,
   address: AccountAddress,
 }
 
 impl<'ctx> SymAccountAddress<'ctx> {
   pub const LENGTH: usize = AccountAddress::LENGTH;
 
-  pub fn new(solver: &'ctx Solver<'ctx>, address: AccountAddress) -> Self {
+  pub fn new(context: &'ctx Context, address: AccountAddress) -> Self {
     SymAccountAddress {
-      solver,
+      context,
       address,
     }
   }
@@ -36,10 +36,10 @@ impl<'ctx> SymAccountAddress<'ctx> {
   }
 
   pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
-    if self.solver != other.solver {
+    if self.context != other.context {
       let msg = format!("Equals on struct with different solver context: {:?} and {:?}", self, other);
       return Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg));
     }
-    Ok(SymBool::from(self.solver, self.address == other.address))
+    Ok(SymBool::from(self.context, self.address == other.address))
   }
 }

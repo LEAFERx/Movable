@@ -3,7 +3,7 @@ use libra_types::{
   access_path::AccessPath,
   contract_event::ContractEvent,
   vm_error::{StatusCode, VMStatus},
-  write_set::WriteSet,
+  // write_set::WriteSet,
 };
 use move_core_types::{
   gas_schedule::{GasAlgebra, GasCarrier, GasUnits},
@@ -14,7 +14,7 @@ use move_vm_types::loaded_data::types::FatStructType;
 use symbolic_vm::types::{chain_state::SymChainState, values::SymGlobalValue};
 use vm::errors::VMResult;
 
-use solver::Solver;
+use z3::Solver;
 
 pub struct SymbolicExecutionContext<'vtxn, 'ctx> {
   /// Gas metering to track cost of execution.

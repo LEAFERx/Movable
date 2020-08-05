@@ -17,6 +17,5 @@ libra-types = { path = "../../libra/types" }
 z3 = "0.5.1"
 serde = "1.0"
 
-solver = { path = "../solver", package = "movable-solver" }
 symbolic_vm = { path = "../symbolic_vm", package = "movable-symbolic-vm" }
 symbolic_chain_state = { path = "../symbolic_chain_state", package = "movable-symbolic-chain-state" }
