@@ -10,7 +10,7 @@ use move_vm_types::{
   natives::function::{NativeContext, NativeResult},
   values::{debug, vector, /* Struct, */ Value},
 };
-use crate::types::interpreter_context::SymInterpreterContext;
+use crate::state::vm_context::SymbolicVMContext;
 use std::{collections::VecDeque, /* fmt::Write */};
 use vm::errors::VMResult;
 
@@ -109,14 +109,14 @@ impl NativeFunction {
 
 pub(crate) struct FunctionContext<'a, 'vtxn, 'ctx> {
   interpreter: &'a mut SymInterpreter<'vtxn, 'ctx>,
-  interpreter_context: &'a mut dyn SymInterpreterContext<'ctx>,
+  interpreter_context: &'a mut SymbolicVMContext<'vtxn, 'ctx>,
   resolver: &'a Resolver<'a>,
 }
 
 impl<'a, 'vtxn, 'ctx> FunctionContext<'a, 'vtxn, 'ctx> {
   pub(crate) fn new(
     interpreter: &'a mut SymInterpreter<'vtxn, 'ctx>,
-    context: &'a mut dyn SymInterpreterContext<'ctx>,
+    context: &'a mut SymbolicVMContext<'vtxn, 'ctx>,
     resolver: &'a Resolver<'a>,
   ) -> FunctionContext<'a, 'vtxn, 'ctx> {
     FunctionContext {

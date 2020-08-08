@@ -7,7 +7,7 @@ use move_core_types::{
 use move_vm_types::{
   transaction_metadata::TransactionMetadata,
 };
-use crate::types::chain_state::SymChainState;
+use crate::state::vm_context::SymbolicVMContext;
 // use libra_types::{
 //   vm_error::{StatusCode, VMStatus},
 // };
@@ -34,20 +34,20 @@ impl<'ctx> SymbolicVM<'ctx> {
     }
   }
 
-  pub fn execute_function<S: SymChainState<'ctx>>(
+  pub fn execute_function<'vtxn>(
     &self,
     module: &ModuleId,
     function_name: &IdentStr,
     // gas_schedule: &CostTable,
-    chain_state: &mut S,
-    txn_data: &TransactionMetadata,
+    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+    txn_data: &'vtxn TransactionMetadata,
     // ty_args: Vec<TypeTag>,
     // args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
-    let args = construct_symbolic_args(module, function_name, self.solver, &self.runtime, chain_state)?;
+    let args = construct_symbolic_args(module, function_name, self.solver, &self.runtime, vm_ctx)?;
     self.runtime.execute_function(
       self.solver,
-      chain_state,
+      vm_ctx,
       txn_data,
       // gas_schedule,
       module,
@@ -57,35 +57,35 @@ impl<'ctx> SymbolicVM<'ctx> {
     )
   }
 
-  pub fn execute_script<S: SymChainState<'ctx>>(
+  pub fn execute_script<'vtxn>(
     &self,
     script: Vec<u8>,
     gas_schedule: &CostTable,
-    chain_state: &mut S,
-    txn_data: &TransactionMetadata,
+    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+    txn_data: &'vtxn TransactionMetadata,
     ty_args: Vec<TypeTag>,
     args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
     self
       .runtime
-      .execute_script(self.solver, chain_state, txn_data, gas_schedule, script, ty_args, args)
+      .execute_script(self.solver, vm_ctx, txn_data, gas_schedule, script, ty_args, args)
   }
 
-  pub fn publish_module<S: SymChainState<'ctx>>(
+  pub fn publish_module<'vtxn>(
     &self,
     module: Vec<u8>,
-    chain_state: &mut S,
-    txn_data: &TransactionMetadata,
+    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+    txn_data: &'vtxn TransactionMetadata,
   ) -> VMResult<()> {
-    self.runtime.publish_module(module, chain_state, txn_data)
+    self.runtime.publish_module(module, vm_ctx, txn_data)
   }
 
-  pub fn cache_module<S: SymChainState<'ctx>>(
+  pub fn cache_module(
     &self,
     module: VerifiedModule,
-    chain_state: &mut S,
+    vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
   ) -> VMResult<()> {
-    self.runtime.cache_module(module, chain_state)
+    self.runtime.cache_module(module, vm_ctx)
   }
 }
 
@@ -96,14 +96,14 @@ impl<'ctx> SymbolicVM<'ctx> {
 // }
 
 //// Construct symbolic arguments
-fn construct_symbolic_args<'ctx, S: SymChainState<'ctx>>(
+fn construct_symbolic_args<'ctx>(
   module: &ModuleId,
   function_name: &IdentStr,
   solver: &'ctx Solver<'ctx>,
   runtime: &VMRuntime<'ctx>,
-  chain_state: &mut S,
+  vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
 ) -> VMResult<Vec<SymValue<'ctx>>> {
-  let func = runtime.load_function(function_name, module, chain_state)?;
+  let func = runtime.load_function(function_name, module, vm_ctx)?;
   let mut args = vec![];
   let prefix = "TestFuncArgs";
   for sig in func.parameters().0.clone() {

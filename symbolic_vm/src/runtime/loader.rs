@@ -1,4 +1,4 @@
-use crate::runtime::native_functions::NativeFunction;
+
 use bytecode_verifier::{
   verifier::{verify_dependencies, verify_script_dependency_map},
   VerifiedModule, VerifiedScript,
@@ -19,7 +19,10 @@ use move_vm_types::{
     types::{FatStructType, FatType},
   },
 };
-use crate::types::interpreter_context::SymInterpreterContext;
+use crate::{
+  runtime::native_functions::NativeFunction,
+  state::vm_context::SymbolicVMContext,
+};
 use std::{
   collections::{BTreeMap, HashMap},
   fmt::Debug,
@@ -325,9 +328,9 @@ impl Loader {
     &self,
     function_name: &IdentStr,
     module_id: &ModuleId,
-    context: &mut dyn SymInterpreterContext,
+    vm_ctx: &mut SymbolicVMContext,
   ) -> VMResult<Arc<Function>> {
-    self.load_module(module_id, context)?;
+    self.load_module(module_id, vm_ctx)?;
     let idx = self
       .module_cache
       .lock()
@@ -339,14 +342,14 @@ impl Loader {
   pub(crate) fn load_script(
     &self,
     script_blob: &[u8],
-    context: &mut dyn SymInterpreterContext,
+    vm_ctx: &mut SymbolicVMContext,
   ) -> VMResult<Arc<Function>> {
     let hash_value = HashValue::from_sha3_256(script_blob);
     if let Some(main) = self.scripts.lock().unwrap().get(&hash_value) {
       return Ok(main);
     }
 
-    let ver_script = self.deserialize_and_verify_script(script_blob, context)?;
+    let ver_script = self.deserialize_and_verify_script(script_blob, vm_ctx)?;
     let script = Script::new(ver_script, &hash_value, &self.module_cache.lock().unwrap())?;
     self.scripts.lock().unwrap().insert(hash_value, script)
   }
@@ -354,7 +357,7 @@ impl Loader {
   pub(crate) fn load_type(
     &self,
     type_tag: &TypeTag,
-    context: &dyn SymInterpreterContext,
+    vm_ctx: &SymbolicVMContext,
   ) -> VMResult<Type> {
     Ok(match type_tag {
       TypeTag::Bool => Type::Bool,
@@ -363,10 +366,10 @@ impl Loader {
       TypeTag::U128 => Type::U128,
       TypeTag::Address => Type::Address,
       TypeTag::Signer => Type::Signer,
-      TypeTag::Vector(tt) => Type::Vector(Box::new(self.load_type(tt, context)?)),
+      TypeTag::Vector(tt) => Type::Vector(Box::new(self.load_type(tt, vm_ctx)?)),
       TypeTag::Struct(struct_tag) => {
         let module_id = ModuleId::new(struct_tag.address, struct_tag.module.clone());
-        self.load_module(&module_id, context)?;
+        self.load_module(&module_id, vm_ctx)?;
         let (idx, struct_type) = self
           .module_cache
           .lock()
@@ -377,7 +380,7 @@ impl Loader {
         } else {
           let mut type_params = vec![];
           for ty_param in &struct_tag.type_params {
-            type_params.push(self.load_type(ty_param, context)?);
+            type_params.push(self.load_type(ty_param, vm_ctx)?);
           }
           self.verify_ty_args(&struct_type.type_parameters, &type_params)?;
           Type::StructInstantiation(idx, type_params)
@@ -389,9 +392,9 @@ impl Loader {
   pub(crate) fn cache_module(
     &self,
     module: VerifiedModule,
-    context: &mut dyn SymInterpreterContext,
+    vm_ctx: &mut SymbolicVMContext,
   ) -> VMResult<()> {
-    self.check_dependencies(&module, context)?;
+    self.check_dependencies(&module, vm_ctx)?;
     Self::check_natives(&module)?;
     let module_id = module.self_id();
     self
@@ -402,11 +405,11 @@ impl Loader {
       .and_then(|_| Ok(()))
   }
 
-  fn load_module(&self, id: &ModuleId, context: &dyn SymInterpreterContext) -> VMResult<Arc<Module>> {
+  fn load_module(&self, id: &ModuleId, vm_ctx: &SymbolicVMContext) -> VMResult<Arc<Module>> {
     if let Some(module) = self.module_cache.lock().unwrap().get(id) {
       return Ok(module);
     }
-    let module = self.deserialize_and_verify_module(id, context)?;
+    let module = self.deserialize_and_verify_module(id, vm_ctx)?;
     Self::check_natives(&module)?;
     self.module_cache.lock().unwrap().insert(id.clone(), module)
   }
@@ -528,7 +531,7 @@ impl Loader {
   fn deserialize_and_verify_script(
     &self,
     script: &[u8],
-    context: &mut dyn SymInterpreterContext,
+    vm_ctx: &mut SymbolicVMContext,
   ) -> VMResult<VerifiedScript> {
     let script = match CompiledScript::deserialize(script) {
       Ok(script) => script,
@@ -546,7 +549,7 @@ impl Loader {
         let deps = load_script_dependencies(&script);
         let mut dependencies = vec![];
         for dep in &deps {
-          dependencies.push(self.load_module(dep, context)?);
+          dependencies.push(self.load_module(dep, vm_ctx)?);
         }
         let mut dependency_map = BTreeMap::new();
         for dependency in &dependencies {
@@ -572,9 +575,9 @@ impl Loader {
   fn deserialize_and_verify_module(
     &self,
     id: &ModuleId,
-    context: &dyn SymInterpreterContext,
+    vm_ctx: &SymbolicVMContext,
   ) -> VMResult<VerifiedModule> {
-    let comp_module = match context.load_module(id) {
+    let comp_module = match vm_ctx.load_module(id) {
       Ok(blob) => match CompiledModule::deserialize(&blob) {
         Ok(module) => module,
         Err(err) => {
@@ -589,7 +592,7 @@ impl Loader {
     };
     match VerifiedModule::new(comp_module) {
       Ok(module) => {
-        self.check_dependencies(&module, context)?;
+        self.check_dependencies(&module, vm_ctx)?;
         Ok(module)
       }
       Err((_, err)) => Err(err),
@@ -599,12 +602,12 @@ impl Loader {
   fn check_dependencies(
     &self,
     module: &VerifiedModule,
-    context: &dyn SymInterpreterContext,
+    vm_ctx: &SymbolicVMContext,
   ) -> VMResult<()> {
     let deps = load_module_dependencies(module);
     let mut dependencies = vec![];
     for dep in &deps {
-      dependencies.push(self.load_module(dep, context)?);
+      dependencies.push(self.load_module(dep, vm_ctx)?);
     }
     let mut dependency_map = BTreeMap::new();
     for dependency in &dependencies {
@@ -721,9 +724,9 @@ impl<'a> Resolver<'a> {
     module_id: &ModuleId,
     name: &IdentStr,
     ty_args: &[Type],
-    context: &mut dyn SymInterpreterContext,
+    vm_ctx: &mut SymbolicVMContext,
   ) -> VMResult<Arc<LibraType>> {
-    self.loader.load_module(module_id, context)?;
+    self.loader.load_module(module_id, vm_ctx)?;
     self.loader.get_libra_type_info(module_id, name, ty_args)
   }
 

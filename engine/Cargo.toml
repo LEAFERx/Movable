@@ -18,4 +18,3 @@ z3 = "0.5.1"
 serde = "1.0"
 
 symbolic_vm = { path = "../symbolic_vm", package = "movable-symbolic-vm" }
-symbolic_chain_state = { path = "../symbolic_chain_state", package = "movable-symbolic-chain-state" }

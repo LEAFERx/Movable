@@ -14,8 +14,10 @@ use serde::{Deserialize, Serialize};
 use z3::{Config, Context};
 
 use z3::Solver;
-use symbolic_vm::runtime::vm::SymbolicVM;
-use symbolic_chain_state::execution_context::SymbolicExecutionContext;
+use symbolic_vm::{
+  runtime::vm::SymbolicVM,
+  state::vm_context::SymbolicVMContext,
+};
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 struct ModuleList {
@@ -53,8 +55,8 @@ impl Engine {
     let solver = Solver::new(&context);
     let vm = SymbolicVM::new(&solver);
     let data_cache = BlockDataCache::new(&self.data_store);
-    let mut interp_context = SymbolicExecutionContext::new(&solver, GasUnits::new(0), &data_cache);
-    vm.execute_function(module, function_name, &mut interp_context, &TransactionMetadata::default())
+    let mut vm_ctx = SymbolicVMContext::new(&context, GasUnits::new(0), &data_cache);
+    vm.execute_function(module, function_name, &mut vm_ctx, &TransactionMetadata::default())
       .expect("VM should run correctly");
   }
 }

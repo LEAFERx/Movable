@@ -1,4 +1,4 @@
-use crate::runtime::{interpreter::SymInterpreter, loader::Loader};
+
 use bytecode_verifier::VerifiedModule;
 // use libra_logger::prelude::*;
 use libra_types::vm_error::{StatusCode, VMStatus};
@@ -10,8 +10,10 @@ use move_core_types::{
 use move_vm_types::{
   transaction_metadata::TransactionMetadata,
 };
-use crate::types::interpreter_context::SymInterpreterContext;
-
+use crate::{
+  runtime::{interpreter::SymInterpreter, loader::Loader},
+  state::vm_context::SymbolicVMContext,
+};
 use vm::{
   access::ModuleAccess,
   errors::{verification_error, vm_error, Location, VMResult},
@@ -48,7 +50,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub(crate) fn publish_module(
     &self,
     module: Vec<u8>,
-    context: &mut dyn SymInterpreterContext<'ctx>,
+    vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
     txn_data: &TransactionMetadata,
   ) -> VMResult<()> {
     let compiled_module = match CompiledModule::deserialize(&module) {
@@ -73,7 +75,7 @@ impl<'ctx> VMRuntime<'ctx> {
     // Make sure that there is not already a module with this name published
     // under the transaction sender's account.
     let module_id = compiled_module.self_id();
-    if context.exists_module(&module_id) {
+    if vm_ctx.exists_module(&module_id) {
       return Err(vm_error(
         Location::default(),
         StatusCode::DUPLICATE_MODULE_NAME,
@@ -82,14 +84,14 @@ impl<'ctx> VMRuntime<'ctx> {
 
     let verified_module = VerifiedModule::new(compiled_module).map_err(|(_, e)| e)?;
     Loader::check_natives(&verified_module)?;
-    context.publish_module(module_id, module)
+    vm_ctx.publish_module(module_id, module)
   }
 
-  pub fn execute_script(
+  pub fn execute_script<'vtxn>(
     &self,
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn SymInterpreterContext<'ctx>,
-    txn_data: &TransactionMetadata,
+    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+    txn_data: &'vtxn TransactionMetadata,
     _gas_schedule: &CostTable,
     script: Vec<u8>,
     ty_args: Vec<TypeTag>,
@@ -97,9 +99,9 @@ impl<'ctx> VMRuntime<'ctx> {
   ) -> VMResult<()> {
     let mut type_params = vec![];
     for ty in &ty_args {
-      type_params.push(self.loader.load_type(ty, context)?);
+      type_params.push(self.loader.load_type(ty, vm_ctx)?);
     }
-    let main = self.loader.load_script(&script, context)?;
+    let main = self.loader.load_script(&script, vm_ctx)?;
 
     self
       .loader
@@ -108,7 +110,7 @@ impl<'ctx> VMRuntime<'ctx> {
 
     SymInterpreter::entrypoint(
       solver,
-      context,
+      vm_ctx,
       &self.loader,
       txn_data,
       // gas_schedule,
@@ -118,11 +120,11 @@ impl<'ctx> VMRuntime<'ctx> {
     )
   }
 
-  pub fn execute_function(
+  pub fn execute_function<'vtxn>(
     &self,
     solver: &'ctx Solver<'ctx>,
-    context: &mut dyn SymInterpreterContext<'ctx>,
-    txn_data: &TransactionMetadata,
+    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+    txn_data: &'vtxn TransactionMetadata,
     // gas_schedule: &CostTable,
     module: &ModuleId,
     function_name: &IdentStr,
@@ -133,7 +135,7 @@ impl<'ctx> VMRuntime<'ctx> {
     // for ty in &ty_args {
     //   type_params.push(self.loader.load_type(ty, context)?);
     // }
-    let func = self.loader.load_function(function_name, module, context)?;
+    let func = self.loader.load_function(function_name, module, vm_ctx)?;
 
     // self
     //   .loader
@@ -143,7 +145,7 @@ impl<'ctx> VMRuntime<'ctx> {
 
     SymInterpreter::entrypoint(
       solver,
-      context,
+      vm_ctx,
       &self.loader,
       txn_data,
       // gas_schedule,
@@ -156,18 +158,18 @@ impl<'ctx> VMRuntime<'ctx> {
   pub fn cache_module(
     &self,
     module: VerifiedModule,
-    context: &mut dyn SymInterpreterContext<'ctx>,
+    vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
   ) -> VMResult<()> {
-    self.loader.cache_module(module, context)
+    self.loader.cache_module(module, vm_ctx)
   }
 
   pub fn load_function(
     &self,
     function_name: &IdentStr,
     module_id: &ModuleId,
-    context: &mut dyn SymInterpreterContext<'ctx>,
+    vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
   ) -> VMResult<Arc<Function>> {
-    self.loader.load_function(function_name, module_id, context)
+    self.loader.load_function(function_name, module_id, vm_ctx)
   }
 }
 

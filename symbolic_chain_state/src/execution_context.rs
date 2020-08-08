@@ -14,7 +14,7 @@ use move_vm_types::loaded_data::types::FatStructType;
 use symbolic_vm::types::{chain_state::SymChainState, values::SymGlobalValue};
 use vm::errors::VMResult;
 
-use z3::Solver;
+use z3::Context;
 
 pub struct SymbolicExecutionContext<'vtxn, 'ctx> {
   /// Gas metering to track cost of execution.
@@ -27,14 +27,14 @@ pub struct SymbolicExecutionContext<'vtxn, 'ctx> {
 
 impl<'vtxn, 'ctx> SymbolicExecutionContext<'vtxn, 'ctx> {
   pub fn new(
-    solver: &'ctx Solver<'ctx>,
+    context: &'ctx Context,
     gas_left: GasUnits<GasCarrier>,
     data_cache: &'vtxn dyn RemoteCache
   ) -> Self {
     Self {
       gas_left,
       event_data: Vec::new(),
-      data_view: SymbolicExecutionDataCache::new(solver, data_cache),
+      data_view: SymbolicExecutionDataCache::new(context, data_cache),
     }
   }
 }

@@ -1,4 +1,4 @@
-use crate::types::{interpreter_context::SymInterpreterContext, values::SymValue};
+use crate::types::{vm_context::SymbolicVMContext, values::SymValue};
 use crate::{
   runtime::interpreter::SymInterpreter,
   runtime::loader::{Function, Loader, Resolver},
@@ -73,7 +73,7 @@ impl<'ctx> ExecutionPlugin<'ctx> {
     &mut self,
     solver: &'ctx Solver,
     interpreter: &mut SymInterpreter<'_, 'ctx>,
-    context: &mut dyn SymInterpreterContext<'ctx>,
+    context: &mut dyn SymbolicVMContext<'ctx>,
   ) -> VMResult<()> {
     Ok(())
   }

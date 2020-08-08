@@ -11,7 +11,7 @@ use move_vm_types::{
   loaded_data::types::FatStructType,
   values::{Struct},
 };
-use symbolic_vm::types::values::{SymGlobalValue, /* SymStruct, */ SymValue};
+use crate::types::values::{SymGlobalValue, /* SymStruct, */ SymValue};
 use move_vm_state::data_cache::RemoteCache;
 use std::{collections::btree_map::BTreeMap, /* mem::replace */};
 use vm::errors::*;
@@ -33,6 +33,10 @@ impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
       data_map: BTreeMap::new(),
       module_map: BTreeMap::new(),
     }
+  }
+
+  pub fn get_context(&self) -> &'ctx Context {
+    self.context
   }
 
   pub fn exists_module(&self, m: &ModuleId) -> bool {

@@ -32,13 +32,15 @@ use vm::{
   file_format::{Constant, SignatureToken},
 };
 
-use z3::ast::Dynamic;
+use z3::{
+  ast::Dynamic,
+  Context,
+};
 
 use crate::types::values::{
   account_address::SymAccountAddress,
   primitives::{SymBool, SymU128, SymU64, SymU8},
 };
-use z3::Context;
 
 /***************************************************************************************
 *
@@ -928,6 +930,12 @@ impl<'ctx> SymLocals<'ctx> {
   pub fn store_loc(&mut self, idx: usize, x: SymValue<'ctx>) -> VMResult<()> {
     self.swap_loc(idx, x)?;
     Ok(())
+  }
+}
+
+impl<'ctx> Clone for SymLocals<'ctx> {
+  fn clone(&self) -> Self {
+    SymLocals(Rc::new(RefCell::new(self.0.borrow().copy_value())))
   }
 }
 
@@ -2036,6 +2044,13 @@ impl<'ctx> SymGlobalValue<'ctx> {
 
   pub fn into_owned_struct(self) -> VMResult<SymStruct<'ctx>> {
     Ok(SymStruct(take_unique_ownership(self.container)?))
+  }
+
+  pub fn clone_for_symbolic_state_fork(&self) -> Self {
+    SymGlobalValue {
+      status: Rc::new(RefCell::new(self.status.borrow().clone())),
+      container: Rc::new(RefCell::new(self.container.borrow().copy_value()))
+    }
   }
 }
 
