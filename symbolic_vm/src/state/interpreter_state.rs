@@ -175,9 +175,6 @@ impl<'ctx> SymInterpreterState<'ctx> {
     ap: &AccessPath,
     ty: &FatStructType
   ) -> VMResult<SymValue<'ctx>> {
-    let resource = self
-      .load_data(vm_ctx, ap, ty)
-      .map(|e| e.take().map(|(_, g)| g));
     let root_value = match self.move_resource(vm_ctx, ap, ty) {
       Ok(g) => g,
       Err(e) => {

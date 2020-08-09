@@ -1,9 +1,9 @@
 use crate::runtime::runtime::VMRuntime;
 use bytecode_verifier::VerifiedModule;
 use move_core_types::{
-  gas_schedule::CostTable,
+  // gas_schedule::CostTable,
   identifier::IdentStr,
-  language_storage::{ModuleId, TypeTag},};
+  language_storage::{ModuleId, /* TypeTag */},};
 use move_vm_types::{
   transaction_metadata::TransactionMetadata,
 };
@@ -18,19 +18,19 @@ use vm::{
   },
 };
 
-use z3::Solver;
+use z3::Context;
 use crate::types::values::SymValue;
 
 pub struct SymbolicVM<'ctx> {
   runtime: VMRuntime<'ctx>,
-  solver: &'ctx Solver<'ctx>,
+  context: &'ctx Context,
 }
 
 impl<'ctx> SymbolicVM<'ctx> {
-  pub fn new(solver: &'ctx Solver<'ctx>) -> Self {
+  pub fn new(context: &'ctx Context) -> Self {
     Self {
       runtime: VMRuntime::new(),
-      solver,
+      context,
     }
   }
 
@@ -44,9 +44,9 @@ impl<'ctx> SymbolicVM<'ctx> {
     // ty_args: Vec<TypeTag>,
     // args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
-    let args = construct_symbolic_args(module, function_name, self.solver, &self.runtime, vm_ctx)?;
+    let args = construct_symbolic_args(module, function_name, self.context, &self.runtime, vm_ctx)?;
     self.runtime.execute_function(
-      self.solver,
+      self.context,
       vm_ctx,
       txn_data,
       // gas_schedule,
@@ -57,19 +57,19 @@ impl<'ctx> SymbolicVM<'ctx> {
     )
   }
 
-  pub fn execute_script<'vtxn>(
-    &self,
-    script: Vec<u8>,
-    gas_schedule: &CostTable,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    txn_data: &'vtxn TransactionMetadata,
-    ty_args: Vec<TypeTag>,
-    args: Vec<SymValue<'ctx>>,
-  ) -> VMResult<()> {
-    self
-      .runtime
-      .execute_script(self.solver, vm_ctx, txn_data, gas_schedule, script, ty_args, args)
-  }
+  // pub fn execute_script<'vtxn>(
+  //   &self,
+  //   script: Vec<u8>,
+  //   gas_schedule: &CostTable,
+  //   vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+  //   txn_data: &'vtxn TransactionMetadata,
+  //   ty_args: Vec<TypeTag>,
+  //   args: Vec<SymValue<'ctx>>,
+  // ) -> VMResult<()> {
+  //   self
+  //     .runtime
+  //     .execute_script(self.context, vm_ctx, txn_data, gas_schedule, script, ty_args, args)
+  // }
 
   pub fn publish_module<'vtxn>(
     &self,
@@ -99,7 +99,7 @@ impl<'ctx> SymbolicVM<'ctx> {
 fn construct_symbolic_args<'ctx>(
   module: &ModuleId,
   function_name: &IdentStr,
-  solver: &'ctx Solver<'ctx>,
+  context: &'ctx Context,
   runtime: &VMRuntime<'ctx>,
   vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
 ) -> VMResult<Vec<SymValue<'ctx>>> {
@@ -108,10 +108,10 @@ fn construct_symbolic_args<'ctx>(
   let prefix = "TestFuncArgs";
   for sig in func.parameters().0.clone() {
     let val = match sig {
-      SignatureToken::Bool => SymValue::new_bool(solver.get_context(), prefix),
-      SignatureToken::U8 => SymValue::new_u8(solver.get_context(), prefix),
-      SignatureToken::U64 => SymValue::new_u64(solver.get_context(), prefix),
-      SignatureToken::U128 => SymValue::new_u128(solver.get_context(), prefix),
+      SignatureToken::Bool => SymValue::new_bool(context, prefix),
+      SignatureToken::U8 => SymValue::new_u8(context, prefix),
+      SignatureToken::U64 => SymValue::new_u64(context, prefix),
+      SignatureToken::U128 => SymValue::new_u128(context, prefix),
       _ => unimplemented!(),
     };
     args.push(val);

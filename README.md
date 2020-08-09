@@ -39,11 +39,10 @@ cargo run <BYTECODE_FILE> -f <FUNCTION_NAME>
 - Native function modelling
 - Stdlib test
 - More benchmarks
-- Docking with plugin system
+- Docking with plugin system (intarith plugin running)
 - Gas infrastructure
 - Debug and log infrastructure
-- Code rewrite to avoid endless `fork`
 
 ### Plugin System
 
-- Single instruction listening support
+- Single instruction listening support (intarith plugin added)

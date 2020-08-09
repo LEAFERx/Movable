@@ -13,7 +13,6 @@ use vm::CompiledModule;
 use serde::{Deserialize, Serialize};
 use z3::{Config, Context};
 
-use z3::Solver;
 use symbolic_vm::{
   runtime::vm::SymbolicVM,
   state::vm_context::SymbolicVMContext,
@@ -52,8 +51,7 @@ impl Engine {
   pub fn execute_function(&self, module: &ModuleId, function_name: &IdentStr) {
     let config = Config::new();
     let context = Context::new(&config);
-    let solver = Solver::new(&context);
-    let vm = SymbolicVM::new(&solver);
+    let vm = SymbolicVM::new(&context);
     let data_cache = BlockDataCache::new(&self.data_store);
     let mut vm_ctx = SymbolicVMContext::new(&context, GasUnits::new(0), &data_cache);
     vm.execute_function(module, function_name, &mut vm_ctx, &TransactionMetadata::default())

@@ -329,11 +329,11 @@ impl<'ctx> SymBool<'ctx> {
   }
 
   pub fn and(&self, other: &Self) -> SymBool<'ctx> {
-    SymBool(self.0.and(&[&other.0]))
+    SymBool(Bool::and(self.0.get_ctx(), &[&self.0, &other.0]))
   }
 
   pub fn or(&self, other: &Self) -> SymBool<'ctx> {
-    SymBool(self.0.or(&[&other.0]))
+    SymBool(Bool::or(self.0.get_ctx(), &[&self.0, &other.0]))
   }
 }
 

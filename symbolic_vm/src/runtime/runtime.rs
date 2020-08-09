@@ -3,15 +3,15 @@ use bytecode_verifier::VerifiedModule;
 // use libra_logger::prelude::*;
 use libra_types::vm_error::{StatusCode, VMStatus};
 use move_core_types::{
-  gas_schedule::CostTable,
+  // gas_schedule::CostTable,
   identifier::IdentStr,
-  language_storage::{ModuleId, TypeTag},
+  language_storage::{ModuleId, /* TypeTag */},
 };
 use move_vm_types::{
   transaction_metadata::TransactionMetadata,
 };
 use crate::{
-  runtime::{interpreter::SymInterpreter, loader::Loader},
+  runtime::{interpreter::{SymInterpreter, SymInterpreterExecutionResult}, loader::Loader},
   state::vm_context::SymbolicVMContext,
 };
 use vm::{
@@ -26,8 +26,9 @@ use std::{
   sync::Arc,
 };
 
-use z3::Solver;
+use z3::Context;
 use crate::{
+  plugin::{PluginManager, IntegerArithmeticPlugin},
   types::values::SymValue,
   runtime::loader::Function,
 };
@@ -36,7 +37,7 @@ use crate::{
 pub(crate) struct VMRuntime<'ctx> {
   loader: Loader,
 
-  phatom: PhantomData<&'ctx Solver<'ctx>>,
+  phatom: PhantomData<&'ctx Context>,
 }
 
 impl<'ctx> VMRuntime<'ctx> {
@@ -87,42 +88,42 @@ impl<'ctx> VMRuntime<'ctx> {
     vm_ctx.publish_module(module_id, module)
   }
 
-  pub fn execute_script<'vtxn>(
-    &self,
-    solver: &'ctx Solver<'ctx>,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    txn_data: &'vtxn TransactionMetadata,
-    _gas_schedule: &CostTable,
-    script: Vec<u8>,
-    ty_args: Vec<TypeTag>,
-    args: Vec<SymValue<'ctx>>,
-  ) -> VMResult<()> {
-    let mut type_params = vec![];
-    for ty in &ty_args {
-      type_params.push(self.loader.load_type(ty, vm_ctx)?);
-    }
-    let main = self.loader.load_script(&script, vm_ctx)?;
+  // pub fn execute_script<'vtxn>(
+  //   &self,
+  //   solver: &'ctx Solver<'ctx>,
+  //   vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+  //   txn_data: &'vtxn TransactionMetadata,
+  //   _gas_schedule: &CostTable,
+  //   script: Vec<u8>,
+  //   ty_args: Vec<TypeTag>,
+  //   args: Vec<SymValue<'ctx>>,
+  // ) -> VMResult<()> {
+  //   let mut type_params = vec![];
+  //   for ty in &ty_args {
+  //     type_params.push(self.loader.load_type(ty, vm_ctx)?);
+  //   }
+  //   let main = self.loader.load_script(&script, vm_ctx)?;
 
-    self
-      .loader
-      .verify_ty_args(main.type_parameters(), &type_params)?;
-    verify_args(main.parameters(), &args)?;
+  //   self
+  //     .loader
+  //     .verify_ty_args(main.type_parameters(), &type_params)?;
+  //   verify_args(main.parameters(), &args)?;
 
-    SymInterpreter::entrypoint(
-      solver,
-      vm_ctx,
-      &self.loader,
-      txn_data,
-      // gas_schedule,
-      main,
-      // type_params,
-      args,
-    )
-  }
+  //   SymInterpreter::entrypoint(
+  //     solver,
+  //     vm_ctx,
+  //     &self.loader,
+  //     txn_data,
+  //     // gas_schedule,
+  //     main,
+  //     // type_params,
+  //     args,
+  //   )
+  // }
 
   pub fn execute_function<'vtxn>(
     &self,
-    solver: &'ctx Solver<'ctx>,
+    z3_ctx: &'ctx Context,
     vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
     txn_data: &'vtxn TransactionMetadata,
     // gas_schedule: &CostTable,
@@ -131,6 +132,10 @@ impl<'ctx> VMRuntime<'ctx> {
     // ty_args: Vec<TypeTag>,
     args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
+    let int_plugin = IntegerArithmeticPlugin::new();
+    let mut manager = PluginManager::new();
+    manager.add_plugin(int_plugin);
+  
     // let mut type_params = vec![];
     // for ty in &ty_args {
     //   type_params.push(self.loader.load_type(ty, context)?);
@@ -143,16 +148,47 @@ impl<'ctx> VMRuntime<'ctx> {
     // REVIEW: argument verification should happen in the interpreter
     //verify_args(func.parameters(), &args)?;
 
-    SymInterpreter::entrypoint(
-      solver,
+    let interp = SymInterpreter::entrypoint(
+      z3_ctx,
       vm_ctx,
-      &self.loader,
       txn_data,
       // gas_schedule,
       func,
       // type_params,
-      args,
-    )
+      &args,
+    )?;
+
+    let args: VMResult<Vec<_>> = args.into_iter().map(|v| v.into_ast()).collect();
+    let args = args?;
+
+    let mut interp_stack = vec![];
+    interp_stack.push(interp);
+    loop {
+      if let Some(interp) = interp_stack.pop() {
+        match interp.execute(&self.loader, vm_ctx, &mut manager)? {
+          SymInterpreterExecutionResult::Fork(forks) => {
+            for interp in forks {
+              interp_stack.push(interp);
+            }
+          }
+          SymInterpreterExecutionResult::Report(model, return_values) => {
+            println!("---------------------");
+            println!("Args:");
+            for (idx, val) in args.iter().enumerate() {
+              println!("Index {}: {:#?}", idx, model.eval(val));
+            }
+            println!("Returns:");
+            for (idx, val) in return_values.into_iter().enumerate() {
+              println!("Index {}: {:#?}", idx, model.eval(&val.into_ast()?));
+            }
+            println!("---------------------");
+          }
+        }
+      } else {
+        break;
+      }
+    }
+    Ok(())
   }
 
   pub fn cache_module(

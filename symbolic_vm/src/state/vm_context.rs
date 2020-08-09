@@ -1,10 +1,10 @@
 use libra_types::{
   access_path::AccessPath,
-  vm_error::{StatusCode, VMStatus},
+  // vm_error::{StatusCode, VMStatus},
   // write_set::WriteSet,
 };
 use move_core_types::{
-  gas_schedule::{GasAlgebra, GasCarrier, GasUnits},
+  gas_schedule::{GasCarrier, GasUnits},
   language_storage::ModuleId,
 };
 use move_vm_state::data_cache::RemoteCache;
