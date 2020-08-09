@@ -1,0 +1,12 @@
+module Test {
+  public overflow(x: u64, y: u64) : u64{
+    return move(x) + move(y);
+  }
+
+  public not_overflow(x: u64, y: u64) : u64{
+    if (copy(x) < 2 && copy(y) < 2) {
+      return move(x) + move(y);
+    }
+    return move(x);
+  }
+}
