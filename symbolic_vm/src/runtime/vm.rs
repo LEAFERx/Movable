@@ -3,7 +3,7 @@ use bytecode_verifier::VerifiedModule;
 use move_core_types::{
   // gas_schedule::CostTable,
   identifier::IdentStr,
-  language_storage::{ModuleId, /* TypeTag */},};
+  language_storage::{ModuleId, TypeTag},};
 use move_vm_types::{
   transaction_metadata::TransactionMetadata,
 };
@@ -44,7 +44,7 @@ impl<'ctx> SymbolicVM<'ctx> {
     // ty_args: Vec<TypeTag>,
     // args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
-    let args = construct_symbolic_args(module, function_name, self.context, &self.runtime, vm_ctx)?;
+    let (ty_args, args) = construct_symbolic_args(module, function_name, self.context, &self.runtime, vm_ctx)?;
     self.runtime.execute_function(
       self.context,
       vm_ctx,
@@ -52,7 +52,7 @@ impl<'ctx> SymbolicVM<'ctx> {
       // gas_schedule,
       module,
       function_name,
-      // ty_args,
+      ty_args,
       args,
     )
   }
@@ -99,22 +99,24 @@ impl<'ctx> SymbolicVM<'ctx> {
 fn construct_symbolic_args<'ctx>(
   module: &ModuleId,
   function_name: &IdentStr,
-  context: &'ctx Context,
+  z3_ctx: &'ctx Context,
   runtime: &VMRuntime<'ctx>,
   vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
-) -> VMResult<Vec<SymValue<'ctx>>> {
+) -> VMResult<(Vec<TypeTag>, Vec<SymValue<'ctx>>)> {
   let func = runtime.load_function(function_name, module, vm_ctx)?;
   let mut args = vec![];
   let prefix = "TestFuncArgs";
-  for sig in func.parameters().0.clone() {
-    let val = match sig {
-      SignatureToken::Bool => SymValue::new_bool(context, prefix),
-      SignatureToken::U8 => SymValue::new_u8(context, prefix),
-      SignatureToken::U64 => SymValue::new_u64(context, prefix),
-      SignatureToken::U128 => SymValue::new_u128(context, prefix),
+  let mut ty_args = vec![];
+  for sig in &func.parameters().0 {
+    let (ty, val) = match sig {
+      SignatureToken::Bool => (TypeTag::Bool, SymValue::new_bool(z3_ctx, prefix)),
+      SignatureToken::U8 => (TypeTag::U8, SymValue::new_u8(z3_ctx, prefix)),
+      SignatureToken::U64 => (TypeTag::U64, SymValue::new_u64(z3_ctx, prefix)),
+      SignatureToken::U128 => (TypeTag::U128, SymValue::new_u128(z3_ctx, prefix)),
       _ => unimplemented!(),
     };
     args.push(val);
+    ty_args.push(ty);
   }
-  Ok(args)
+  Ok((ty_args, args))
 }

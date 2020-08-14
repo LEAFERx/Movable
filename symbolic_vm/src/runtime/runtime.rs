@@ -5,7 +5,7 @@ use libra_types::vm_error::{StatusCode, VMStatus};
 use move_core_types::{
   // gas_schedule::CostTable,
   identifier::IdentStr,
-  language_storage::{ModuleId, /* TypeTag */},
+  language_storage::{ModuleId, TypeTag},
 };
 use move_vm_types::{
   transaction_metadata::TransactionMetadata,
@@ -129,24 +129,24 @@ impl<'ctx> VMRuntime<'ctx> {
     // gas_schedule: &CostTable,
     module: &ModuleId,
     function_name: &IdentStr,
-    // ty_args: Vec<TypeTag>,
+    ty_args: Vec<TypeTag>,
     args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
     let int_plugin = IntegerArithmeticPlugin::new();
     let mut manager = PluginManager::new();
     manager.add_plugin(int_plugin);
   
-    // let mut type_params = vec![];
-    // for ty in &ty_args {
-    //   type_params.push(self.loader.load_type(ty, context)?);
-    // }
+    let mut type_params = vec![];
+    for ty in &ty_args {
+      type_params.push(self.loader.load_type(ty, vm_ctx)?);
+    }
     let func = self.loader.load_function(function_name, module, vm_ctx)?;
 
     // self
     //   .loader
     //   .verify_ty_args(func.type_parameters(), &type_params)?;
     // REVIEW: argument verification should happen in the interpreter
-    //verify_args(func.parameters(), &args)?;
+    // verify_args(func.parameters(), &args)?;
 
     let interp = SymInterpreter::entrypoint(
       z3_ctx,
@@ -154,7 +154,7 @@ impl<'ctx> VMRuntime<'ctx> {
       txn_data,
       // gas_schedule,
       func,
-      // type_params,
+      type_params,
       &args,
     )?;
 
@@ -210,7 +210,7 @@ impl<'ctx> VMRuntime<'ctx> {
 }
 
 /// Verify if the transaction arguments match the type signature of the main function.
-fn verify_args<'ctx>(signature: &Signature, args: &[SymValue<'ctx>]) -> VMResult<()> {
+fn _verify_args<'ctx>(signature: &Signature, args: &[SymValue<'ctx>]) -> VMResult<()> {
   if signature.len() != args.len() {
     return Err(
       VMStatus::new(StatusCode::TYPE_MISMATCH).with_message(format!(

@@ -34,7 +34,6 @@ cargo run <BYTECODE_FILE> -f <FUNCTION_NAME>
 
 ### Symbolic VM
 
-- Generics support
 - Vector support
 - Native function modelling
 - Stdlib test
