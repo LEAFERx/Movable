@@ -1,18 +1,23 @@
 use crate::runtime::{interpreter::SymInterpreter, loader::Resolver};
 use libra_types::{
-  /* access_path::AccessPath, */account_address::AccountAddress, account_config::CORE_CODE_ADDRESS,
-  /* contract_event::ContractEvent, */
+  access_path::AccessPath, account_address::AccountAddress, account_config::CORE_CODE_ADDRESS,
+  contract_event::ContractEvent,
 };
-// use move_core_types::{gas_schedule::CostTable, identifier::IdentStr, language_storage::ModuleId};
-use move_vm_natives::{account, event, hash, lcs, signature};
+use move_core_types::{/* gas_schedule::CostTable, */identifier::IdentStr, language_storage::ModuleId};
+// use move_vm_natives::{account, event, hash, lcs, signature};
 use move_vm_types::{
-  loaded_data::{runtime_types::Type, /* types::FatType */},
-  natives::function::{NativeContext, NativeResult},
-  values::{debug, vector, /* Struct, */ Value},
+  loaded_data::{runtime_types::Type, types::FatType},
 };
-use crate::state::vm_context::SymbolicVMContext;
-use std::{collections::VecDeque, /* fmt::Write */};
+use crate::{
+  state::vm_context::SymbolicVMContext,
+  types::{
+    natives::{SymNativeContext, SymNativeResult},
+    values::{vector, SymStruct, SymValue},
+  },
+};
+use std::{collections::VecDeque, fmt::Write};
 use vm::errors::VMResult;
+use z3::Context;
 
 // The set of native functions the VM supports.
 // The functions can line in any crate linked in but the VM declares them here.
@@ -75,98 +80,106 @@ impl NativeFunction {
   }
 
   /// Given the vector of aguments, it executes the native function.
-  pub(crate) fn dispatch(
+  pub(crate) fn dispatch<'ctx>(
     self,
-    ctx: &mut impl NativeContext,
+    ctx: &mut impl SymNativeContext<'ctx>,
     t: Vec<Type>,
-    v: VecDeque<Value>,
-  ) -> VMResult<NativeResult> {
+    v: VecDeque<SymValue<'ctx>>,
+  ) -> VMResult<SymNativeResult<'ctx>> {
     match self {
-      Self::HashSha2_256 => hash::native_sha2_256(ctx, t, v),
-      Self::HashSha3_256 => hash::native_sha3_256(ctx, t, v),
-      Self::PubED25519Validate => signature::native_ed25519_publickey_validation(ctx, t, v),
-      Self::SigED25519Verify => signature::native_ed25519_signature_verification(ctx, t, v),
-      Self::SigED25519ThresholdVerify => {
-        signature::native_ed25519_threshold_signature_verification(ctx, t, v)
-      }
+      // Self::HashSha2_256 => hash::native_sha2_256(ctx, t, v),
+      // Self::HashSha3_256 => hash::native_sha3_256(ctx, t, v),
+      // Self::PubED25519Validate => signature::native_ed25519_publickey_validation(ctx, t, v),
+      // Self::SigED25519Verify => signature::native_ed25519_signature_verification(ctx, t, v),
+      // Self::SigED25519ThresholdVerify => {
+      //   signature::native_ed25519_threshold_signature_verification(ctx, t, v)
+      // }
       Self::VectorLength => vector::native_length(ctx, t, v),
       Self::VectorEmpty => vector::native_empty(ctx, t, v),
-      Self::VectorBorrow => vector::native_borrow(ctx, t, v),
-      Self::VectorBorrowMut => vector::native_borrow(ctx, t, v),
+      // Self::VectorBorrow => vector::native_borrow(ctx, t, v),
+      // Self::VectorBorrowMut => vector::native_borrow(ctx, t, v),
       Self::VectorPushBack => vector::native_push_back(ctx, t, v),
       Self::VectorPopBack => vector::native_pop(ctx, t, v),
       Self::VectorDestroyEmpty => vector::native_destroy_empty(ctx, t, v),
-      Self::VectorSwap => vector::native_swap(ctx, t, v),
+      // Self::VectorSwap => vector::native_swap(ctx, t, v),
       // natives that need the full API of `NativeContext`
-      Self::AccountWriteEvent => event::native_emit_event(ctx, t, v),
-      Self::AccountSaveAccount => account::native_save_account(ctx, t, v),
-      Self::LCSToBytes => lcs::native_to_bytes(ctx, t, v),
-      Self::DebugPrint => debug::native_print(ctx, t, v),
-      Self::DebugPrintStackTrace => debug::native_print_stack_trace(ctx, t, v),
+      // Self::AccountWriteEvent => event::native_emit_event(ctx, t, v),
+      // Self::AccountSaveAccount => account::native_save_account(ctx, t, v),
+      // Self::LCSToBytes => lcs::native_to_bytes(ctx, t, v),
+      // Self::DebugPrint => debug::native_print(ctx, t, v),
+      // Self::DebugPrintStackTrace => debug::native_print_stack_trace(ctx, t, v),
+      _ => unimplemented!(),
     }
   }
 }
 
-pub(crate) struct FunctionContext<'a, 'vtxn, 'ctx> {
+pub(crate) struct SymFunctionContext<'a, 'vtxn, 'ctx> {
+  z3_ctx: &'ctx Context,
   interpreter: &'a mut SymInterpreter<'vtxn, 'ctx>,
-  interpreter_context: &'a mut SymbolicVMContext<'vtxn, 'ctx>,
+  vm_ctx: &'a mut SymbolicVMContext<'vtxn, 'ctx>,
   resolver: &'a Resolver<'a>,
 }
 
-impl<'a, 'vtxn, 'ctx> FunctionContext<'a, 'vtxn, 'ctx> {
+impl<'a, 'vtxn, 'ctx> SymFunctionContext<'a, 'vtxn, 'ctx> {
   pub(crate) fn new(
+    z3_ctx: &'ctx Context,
     interpreter: &'a mut SymInterpreter<'vtxn, 'ctx>,
-    context: &'a mut SymbolicVMContext<'vtxn, 'ctx>,
+    vm_ctx: &'a mut SymbolicVMContext<'vtxn, 'ctx>,
     resolver: &'a Resolver<'a>,
-  ) -> FunctionContext<'a, 'vtxn, 'ctx> {
-    FunctionContext {
+  ) -> SymFunctionContext<'a, 'vtxn, 'ctx> {
+    SymFunctionContext {
+      z3_ctx,
       interpreter,
-      interpreter_context: context,
+      vm_ctx,
       resolver,
     }
   }
 }
 
-// impl<'a, 'vtxn, 'ctx> NativeContext for FunctionContext<'a, 'vtxn, 'ctx> {
-//   fn print_stack_trace<B: Write>(&self, buf: &mut B) -> VMResult<()> {
-//     // self
-//     //   .interpreter
-//     //   .debug_print_stack_trace(buf, &self.resolver)
-//     Ok(())
-//   }
+impl<'a, 'vtxn, 'ctx> SymNativeContext<'ctx> for SymFunctionContext<'a, 'vtxn, 'ctx> {
+  fn get_z3_ctx(&self) -> &'ctx Context {
+    self.z3_ctx
+  }
 
-//   // fn cost_table(&self) -> &CostTable {
-//   //   self.interpreter.gas_schedule()
-//   // }
+  fn print_stack_trace<B: Write>(&self, _buf: &mut B) -> VMResult<()> {
+    // self
+    //   .interpreter
+    //   .debug_print_stack_trace(buf, &self.resolver)
+    Ok(())
+  }
 
-//   fn save_under_address(
-//     &mut self,
-//     ty_args: &[Type],
-//     module_id: &ModuleId,
-//     struct_name: &IdentStr,
-//     resource_to_save: Struct,
-//     account_address: AccountAddress,
-//   ) -> VMResult<()> {
-//     let libra_type = self.resolver.get_libra_type_info(
-//       module_id,
-//       struct_name,
-//       ty_args,
-//       self.interpreter_context,
-//     )?;
-//     let ap = AccessPath::new(account_address, libra_type.resource_key().to_vec());
-//     self
-//       .interpreter_context
-//       .move_resource_to(&ap, libra_type.fat_type(), resource_to_save)
-//   }
+  // fn cost_table(&self) -> &CostTable {
+  //   self.interpreter.gas_schedule()
+  // }
 
-//   fn save_event(&mut self, event: ContractEvent) -> VMResult<()> {
-//     Ok(self.interpreter_context.push_event(event))
-//   }
+  fn save_under_address(
+    &mut self,
+    ty_args: &[Type],
+    module_id: &ModuleId,
+    struct_name: &IdentStr,
+    resource_to_save: SymStruct<'ctx>,
+    account_address: AccountAddress,
+  ) -> VMResult<()> {
+    let libra_type = self.resolver.get_libra_type_info(
+      module_id,
+      struct_name,
+      ty_args,
+      self.vm_ctx,
+    )?;
+    let ap = AccessPath::new(account_address, libra_type.resource_key().to_vec());
+    self
+      .interpreter.state
+      .move_resource_to(self.vm_ctx, &ap, libra_type.fat_type(), resource_to_save)
+  }
 
-//   fn convert_to_fat_types(&self, types: Vec<Type>) -> VMResult<Vec<FatType>> {
-//     types
-//       .iter()
-//       .map(|ty| self.resolver.type_to_fat_type(ty))
-//       .collect()
-//   }
-// }
+  fn save_event(&mut self, event: ContractEvent) -> VMResult<()> {
+    Ok(self.interpreter.state.push_event(event))
+  }
+
+  fn convert_to_fat_types(&self, types: Vec<Type>) -> VMResult<Vec<FatType>> {
+    types
+      .iter()
+      .map(|ty| self.resolver.type_to_fat_type(ty))
+      .collect()
+  }
+}

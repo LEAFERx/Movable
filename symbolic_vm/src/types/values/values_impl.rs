@@ -1,12 +1,7 @@
-// use crate::{
-//   gas_schedule::NativeCostIndex,
-//   loaded_data::types::{FatStructType, FatType},
-//   natives::function::{native_gas, NativeResult},
-// };
 use libra_types::{
   account_address::AccountAddress,
   vm_error::{
-    // sub_status::NFE_VECTOR_ERROR_BASE,
+    sub_status::NFE_VECTOR_ERROR_BASE,
     StatusCode,
     VMStatus,
   },
@@ -15,12 +10,14 @@ use move_core_types::gas_schedule::{
   words_in, AbstractMemorySize, GasAlgebra, GasCarrier, CONST_SIZE, REFERENCE_SIZE, STRUCT_SIZE,
 };
 use move_vm_types::{
+  // gas_schedule::NativeCostIndex,
   loaded_data::types::{FatStructType, FatType},
+  // natives::function::native_gas,
   values::{Struct, VMValueCast, Value},
 };
 use std::{
   cell::{Ref, RefCell, RefMut},
-  // collections::VecDeque,
+  collections::VecDeque,
   fmt::{self, Debug, Display},
   iter,
   mem::size_of,
@@ -37,9 +34,12 @@ use z3::{
   Context,
 };
 
-use crate::types::values::{
-  account_address::SymAccountAddress,
-  primitives::{SymBool, SymU128, SymU64, SymU8},
+use crate::types::{
+  natives::SymNativeResult,
+  values::{
+    account_address::SymAccountAddress,
+    primitives::{SymBool, SymU128, SymU64, SymU8},
+  },
 };
 
 /***************************************************************************************
@@ -1090,6 +1090,43 @@ impl<'ctx> SymValue<'ctx> {
   // }
 }
 
+impl<'ctx> SymContainer<'ctx> {
+  pub fn general(context: &'ctx Context, vec: Vec<SymValueImpl<'ctx>>) -> Self {
+    SymContainer {
+      context,
+      container: SymContainerImpl::General(vec),
+    }
+  }
+
+  pub fn u8(context: &'ctx Context, vec: Vec<SymU8<'ctx>>) -> Self {
+    SymContainer {
+      context,
+      container: SymContainerImpl::U8(vec),
+    }
+  }
+
+  pub fn u64(context: &'ctx Context, vec: Vec<SymU64<'ctx>>) -> Self {
+    SymContainer {
+      context,
+      container: SymContainerImpl::U64(vec),
+    }
+  }
+
+  pub fn u128(context: &'ctx Context, vec: Vec<SymU128<'ctx>>) -> Self {
+    SymContainer {
+      context,
+      container: SymContainerImpl::U128(vec),
+    }
+  }
+  
+  pub fn bool(context: &'ctx Context, vec: Vec<SymBool<'ctx>>) -> Self {
+    SymContainer {
+      context,
+      container: SymContainerImpl::Bool(vec),
+    }
+  }
+}
+
 /***************************************************************************************
 *
 * Casting
@@ -1586,293 +1623,300 @@ impl<'ctx> SymIntegerValue<'ctx> {
 *
 **************************************************************************************/
 
-// pub mod vector {
-//   use super::*;
-//   use crate::{loaded_data::runtime_types::Type, natives::function::NativeContext};
+pub mod vector {
+  use super::*;
+  use move_vm_types::loaded_data::runtime_types::Type;
+  use crate::types::natives::SymNativeContext;
 
-//   pub const INDEX_OUT_OF_BOUNDS: u64 = NFE_VECTOR_ERROR_BASE + 1;
-//   pub const POP_EMPTY_VEC: u64 = NFE_VECTOR_ERROR_BASE + 2;
-//   pub const DESTROY_NON_EMPTY_VEC: u64 = NFE_VECTOR_ERROR_BASE + 3;
+  pub const INDEX_OUT_OF_BOUNDS: u64 = NFE_VECTOR_ERROR_BASE + 1;
+  pub const POP_EMPTY_VEC: u64 = NFE_VECTOR_ERROR_BASE + 2;
+  pub const DESTROY_NON_EMPTY_VEC: u64 = NFE_VECTOR_ERROR_BASE + 3;
 
-//   macro_rules! pop_arg_front {
-//     ($arguments:ident, $t:ty) => {
-//       $arguments.pop_front().unwrap().value_as::<$t>()?
-//     };
-//   }
+  macro_rules! pop_arg_front {
+    ($arguments:ident, $t:ty) => {
+      $arguments.pop_front().unwrap().value_as::<$t>()?
+    };
+  }
 
-//   fn check_elem_layout(ty: &Type, v: &Container) -> VMResult<()> {
-//     match (ty, v) {
-//       (Type::U8, Container::U8(_))
-//       | (Type::U64, Container::U64(_))
-//       | (Type::U128, Container::U128(_))
-//       | (Type::Bool, Container::Bool(_))
-//       | (Type::Address, Container::General(_))
-//       | (Type::Signer, Container::General(_))
-//       | (Type::Vector(_), Container::General(_))
-//       | (Type::Struct(_), Container::General(_)) => Ok(()),
-//       (Type::StructInstantiation(_, _), Container::General(_)) => Ok(()),
+  fn check_elem_layout<'ctx>(ty: &Type, v: &SymContainer<'ctx>) -> VMResult<()> {
+    match (ty, &v.container) {
+      (Type::U8, SymContainerImpl::U8(_))
+      | (Type::U64, SymContainerImpl::U64(_))
+      | (Type::U128, SymContainerImpl::U128(_))
+      | (Type::Bool, SymContainerImpl::Bool(_))
+      | (Type::Address, SymContainerImpl::General(_))
+      | (Type::Signer, SymContainerImpl::General(_))
+      | (Type::Vector(_), SymContainerImpl::General(_))
+      | (Type::Struct(_), SymContainerImpl::General(_)) => Ok(()),
+      (Type::StructInstantiation(_, _), SymContainerImpl::General(_)) => Ok(()),
 
-//       (Type::Reference(_), _) | (Type::MutableReference(_), _) | (Type::TyParam(_), _) => Err(
-//         VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-//           .with_message(format!("invalid type param for vector: {:?}", ty)),
-//       ),
+      (Type::Reference(_), _) | (Type::MutableReference(_), _) | (Type::TyParam(_), _) => Err(
+        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+          .with_message(format!("invalid type param for vector: {:?}", ty)),
+      ),
 
-//       (Type::U8, _)
-//       | (Type::U64, _)
-//       | (Type::U128, _)
-//       | (Type::Bool, _)
-//       | (Type::Address, _)
-//       | (Type::Signer, _)
-//       | (Type::Vector(_), _)
-//       | (Type::Struct(_), _)
-//       | (Type::StructInstantiation(_, _), _) => Err(
-//         VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(format!(
-//           "vector elem layout mismatch, expected {:?}, got {:?}",
-//           ty, v
-//         )),
-//       ),
-//     }
-//   }
+      (Type::U8, _)
+      | (Type::U64, _)
+      | (Type::U128, _)
+      | (Type::Bool, _)
+      | (Type::Address, _)
+      | (Type::Signer, _)
+      | (Type::Vector(_), _)
+      | (Type::Struct(_), _)
+      | (Type::StructInstantiation(_, _), _) => Err(
+        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(format!(
+          "vector elem layout mismatch, expected {:?}, got {:?}",
+          ty, v
+        )),
+      ),
+    }
+  }
 
-//   pub fn native_empty(
-//     context: &impl NativeContext,
-//     ty_args: Vec<Type>,
-//     args: VecDeque<Value>,
-//   ) -> VMResult<NativeResult> {
-//     debug_assert!(ty_args.len() == 1);
-//     debug_assert!(args.is_empty());
+  pub fn native_empty<'ctx>(
+    context: &impl SymNativeContext<'ctx>,
+    ty_args: Vec<Type>,
+    args: VecDeque<SymValue<'ctx>>,
+  ) -> VMResult<SymNativeResult<'ctx>> {
+    debug_assert!(ty_args.len() == 1);
+    debug_assert!(args.is_empty());
 
-//     let cost = native_gas(context.cost_table(), NativeCostIndex::EMPTY, 1);
+    let z3_ctx = context.get_z3_ctx();
 
-//     let container = match &ty_args[0] {
-//       Type::U8 => Container::U8(vec![]),
-//       Type::U64 => Container::U64(vec![]),
-//       Type::U128 => Container::U128(vec![]),
-//       Type::Bool => Container::Bool(vec![]),
+    // let cost = native_gas(context.cost_table(), NativeCostIndex::EMPTY, 1);
 
-//       Type::Address
-//       | Type::Signer
-//       | Type::Vector(_)
-//       | Type::Struct(_)
-//       | Type::StructInstantiation(_, _) => Container::General(vec![]),
+    let container = match &ty_args[0] {
+      Type::U8 => SymContainer::u8(z3_ctx, vec![]),
+      Type::U64 => SymContainer::u64(z3_ctx, vec![]),
+      Type::U128 => SymContainer::u128(z3_ctx, vec![]),
+      Type::Bool => SymContainer::bool(z3_ctx, vec![]),
 
-//       Type::Reference(_) | Type::MutableReference(_) | Type::TyParam(_) => {
-//         return Err(
-//           VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-//             .with_message(format!("invalid type param for vector: {:?}", &ty_args[0])),
-//         )
-//       }
-//     };
+      Type::Address
+      | Type::Signer
+      | Type::Vector(_)
+      | Type::Struct(_)
+      | Type::StructInstantiation(_, _) => SymContainer::general(z3_ctx, vec![]),
 
-//     Ok(NativeResult::ok(
-//       cost,
-//       vec![Value(SymValueImpl::new_container(container))],
-//     ))
-//   }
+      Type::Reference(_) | Type::MutableReference(_) | Type::TyParam(_) => {
+        return Err(
+          VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+            .with_message(format!("invalid type param for vector: {:?}", &ty_args[0])),
+        )
+      }
+    };
 
-//   pub fn native_length(
-//     context: &impl NativeContext,
-//     ty_args: Vec<Type>,
-//     mut args: VecDeque<Value>,
-//   ) -> VMResult<NativeResult> {
-//     debug_assert!(ty_args.len() == 1);
-//     debug_assert!(args.len() == 1);
+    Ok(SymNativeResult::ok(
+      // cost,
+      vec![SymValue(SymValueImpl::new_container(container))],
+    ))
+  }
 
-//     let r = pop_arg_front!(args, ContainerRef);
+  pub fn native_length<'ctx>(
+    context: &impl SymNativeContext<'ctx>,
+    ty_args: Vec<Type>,
+    mut args: VecDeque<SymValue<'ctx>>,
+  ) -> VMResult<SymNativeResult<'ctx>> {
+    debug_assert!(ty_args.len() == 1);
+    debug_assert!(args.len() == 1);
 
-//     let cost = native_gas(context.cost_table(), NativeCostIndex::LENGTH, 1);
+    let z3_ctx = context.get_z3_ctx();
 
-//     let v = r.borrow();
-//     check_elem_layout(&ty_args[0], &*v)?;
-//     let len = match &*v {
-//       Container::U8(v) => v.len(),
-//       Container::U64(v) => v.len(),
-//       Container::U128(v) => v.len(),
-//       Container::Bool(v) => v.len(),
-//       Container::General(v) => v.len(),
-//     };
+    let r = pop_arg_front!(args, SymContainerRef);
 
-//     Ok(NativeResult::ok(cost, vec![Value::u64(len as u64)]))
-//   }
+    // let cost = native_gas(context.cost_table(), NativeCostIndex::LENGTH, 1);
 
-//   pub fn native_push_back(
-//     context: &impl NativeContext,
-//     ty_args: Vec<Type>,
-//     mut args: VecDeque<Value>,
-//   ) -> VMResult<NativeResult> {
-//     debug_assert!(ty_args.len() == 1);
-//     debug_assert!(args.len() == 2);
+    let v = r.borrow();
+    check_elem_layout(&ty_args[0], &*v)?;
+    let len = match &(*v).container {
+      SymContainerImpl::U8(v) => v.len(),
+      SymContainerImpl::U64(v) => v.len(),
+      SymContainerImpl::U128(v) => v.len(),
+      SymContainerImpl::Bool(v) => v.len(),
+      SymContainerImpl::General(v) => v.len(),
+    };
 
-//     let r = pop_arg_front!(args, ContainerRef);
-//     let e = args.pop_front().unwrap();
+    Ok(SymNativeResult::ok(/* cost, */vec![SymValue::from_u64(z3_ctx, len as u64)]))
+  }
 
-//     let cost = native_gas(
-//       context.cost_table(),
-//       NativeCostIndex::PUSH_BACK,
-//       e.size().get() as usize,
-//     );
+  pub fn native_push_back<'ctx>(
+    _context: &impl SymNativeContext<'ctx>,
+    ty_args: Vec<Type>,
+    mut args: VecDeque<SymValue<'ctx>>,
+  ) -> VMResult<SymNativeResult<'ctx>> {
+    debug_assert!(ty_args.len() == 1);
+    debug_assert!(args.len() == 2);
 
-//     let mut v = r.borrow_mut();
-//     check_elem_layout(&ty_args[0], &*v)?;
-//     match &mut *v {
-//       Container::U8(v) => v.push(e.value_as()?),
-//       Container::U64(v) => v.push(e.value_as()?),
-//       Container::U128(v) => v.push(e.value_as()?),
-//       Container::Bool(v) => v.push(e.value_as()?),
-//       Container::General(v) => v.push(e.0),
-//     }
+    let r = pop_arg_front!(args, SymContainerRef);
+    let e = args.pop_front().unwrap();
 
-//     Ok(NativeResult::ok(cost, vec![]))
-//   }
+    // let cost = native_gas(
+    //   context.cost_table(),
+    //   NativeCostIndex::PUSH_BACK,
+    //   e.size().get() as usize,
+    // );
 
-//   pub fn native_borrow(
-//     context: &impl NativeContext,
-//     ty_args: Vec<Type>,
-//     mut args: VecDeque<Value>,
-//   ) -> VMResult<NativeResult> {
-//     debug_assert!(ty_args.len() == 1);
-//     debug_assert!(args.len() == 2);
+    let mut v = r.borrow_mut();
+    check_elem_layout(&ty_args[0], &*v)?;
+    match &mut (*v).container {
+      SymContainerImpl::U8(v) => v.push(e.value_as()?),
+      SymContainerImpl::U64(v) => v.push(e.value_as()?),
+      SymContainerImpl::U128(v) => v.push(e.value_as()?),
+      SymContainerImpl::Bool(v) => v.push(e.value_as()?),
+      SymContainerImpl::General(v) => v.push(e.0),
+    }
 
-//     let r = pop_arg_front!(args, ContainerRef);
-//     let idx = pop_arg_front!(args, u64) as usize;
+    Ok(SymNativeResult::ok(/* cost, */vec![]))
+  }
 
-//     let cost = native_gas(context.cost_table(), NativeCostIndex::BORROW, 1);
+  // !!! symbolic index?
+  // pub fn native_borrow<'ctx>(
+  //   context: &impl SymNativeContext<'ctx>,
+  //   ty_args: Vec<Type>,
+  //   mut args: VecDeque<SymValue<'ctx>>,
+  // ) -> VMResult<SymNativeResult<'ctx>> {
+  //   debug_assert!(ty_args.len() == 1);
+  //   debug_assert!(args.len() == 2);
 
-//     let v = r.borrow();
-//     check_elem_layout(&ty_args[0], &*v)?;
-//     if idx >= v.len() {
-//       return Ok(NativeResult::err(
-//         cost,
-//         VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
-//       ));
-//     }
-//     let v = Value(r.borrow_elem(idx)?);
+  //   let r = pop_arg_front!(args, SymContainerRef);
+  //   let idx = pop_arg_front!(args, u64) as usize;
 
-//     Ok(NativeResult::ok(cost, vec![v]))
-//   }
+  //   let cost = native_gas(context.cost_table(), NativeCostIndex::BORROW, 1);
 
-//   pub fn native_pop(
-//     context: &impl NativeContext,
-//     ty_args: Vec<Type>,
-//     mut args: VecDeque<Value>,
-//   ) -> VMResult<NativeResult> {
-//     debug_assert!(ty_args.len() == 1);
-//     debug_assert!(args.len() == 1);
+  //   let v = r.borrow();
+  //   check_elem_layout(&ty_args[0], &*v)?;
+  //   if idx >= v.len() {
+  //     return Ok(SymNativeResult::err(
+  //       cost,
+  //       VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
+  //     ));
+  //   }
+  //   let v = SymValue(r.borrow_elem(idx)?);
 
-//     let r = pop_arg_front!(args, ContainerRef);
+  //   Ok(SymNativeResult::ok(cost, vec![v]))
+  // }
 
-//     let cost = native_gas(context.cost_table(), NativeCostIndex::POP_BACK, 1);
+  pub fn native_pop<'ctx>(
+    _context: &impl SymNativeContext<'ctx>,
+    ty_args: Vec<Type>,
+    mut args: VecDeque<SymValue<'ctx>>,
+  ) -> VMResult<SymNativeResult<'ctx>> {
+    debug_assert!(ty_args.len() == 1);
+    debug_assert!(args.len() == 1);
 
-//     let mut v = r.borrow_mut();
-//     check_elem_layout(&ty_args[0], &*v)?;
+    let r = pop_arg_front!(args, SymContainerRef);
 
-//     macro_rules! err_pop_empty_vec {
-//       () => {
-//         return Ok(NativeResult::err(
-//           cost,
-//           VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(POP_EMPTY_VEC),
-//         ));
-//       };
-//     }
+    // let cost = native_gas(context.cost_table(), NativeCostIndex::POP_BACK, 1);
 
-//     let res = match &mut *v {
-//       Container::U8(v) => match v.pop() {
-//         Some(x) => Value::u8(x),
-//         None => err_pop_empty_vec!(),
-//       },
-//       Container::U64(v) => match v.pop() {
-//         Some(x) => Value::u64(x),
-//         None => err_pop_empty_vec!(),
-//       },
-//       Container::U128(v) => match v.pop() {
-//         Some(x) => Value::u128(x),
-//         None => err_pop_empty_vec!(),
-//       },
-//       Container::Bool(v) => match v.pop() {
-//         Some(x) => Value::bool(x),
-//         None => err_pop_empty_vec!(),
-//       },
+    let mut v = r.borrow_mut();
+    check_elem_layout(&ty_args[0], &*v)?;
 
-//       Container::General(v) => match v.pop() {
-//         Some(x) => Value(x),
-//         None => err_pop_empty_vec!(),
-//       },
-//     };
+    macro_rules! err_pop_empty_vec {
+      () => {
+        return Ok(SymNativeResult::err(
+          // cost,
+          VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(POP_EMPTY_VEC),
+        ));
+      };
+    }
 
-//     Ok(NativeResult::ok(cost, vec![res]))
-//   }
+    let res = match &mut (*v).container {
+      SymContainerImpl::U8(v) => match v.pop() {
+        Some(x) => SymValue::from_sym_u8(x),
+        None => err_pop_empty_vec!(),
+      },
+      SymContainerImpl::U64(v) => match v.pop() {
+        Some(x) => SymValue::from_sym_u64(x),
+        None => err_pop_empty_vec!(),
+      },
+      SymContainerImpl::U128(v) => match v.pop() {
+        Some(x) => SymValue::from_sym_u128(x),
+        None => err_pop_empty_vec!(),
+      },
+      SymContainerImpl::Bool(v) => match v.pop() {
+        Some(x) => SymValue::from_sym_bool(x),
+        None => err_pop_empty_vec!(),
+      },
 
-//   pub fn native_destroy_empty(
-//     context: &impl NativeContext,
-//     ty_args: Vec<Type>,
-//     mut args: VecDeque<Value>,
-//   ) -> VMResult<NativeResult> {
-//     debug_assert!(ty_args.len() == 1);
-//     debug_assert!(args.len() == 1);
-//     let v = args.pop_front().unwrap().value_as::<Container>()?;
+      SymContainerImpl::General(v) => match v.pop() {
+        Some(x) => SymValue(x),
+        None => err_pop_empty_vec!(),
+      },
+    };
 
-//     let cost = native_gas(context.cost_table(), NativeCostIndex::DESTROY_EMPTY, 1);
+    Ok(SymNativeResult::ok(/* cost, */vec![res]))
+  }
 
-//     check_elem_layout(&ty_args[0], &v)?;
+  pub fn native_destroy_empty<'ctx>(
+    _context: &impl SymNativeContext<'ctx>,
+    ty_args: Vec<Type>,
+    mut args: VecDeque<SymValue<'ctx>>,
+  ) -> VMResult<SymNativeResult<'ctx>> {
+    debug_assert!(ty_args.len() == 1);
+    debug_assert!(args.len() == 1);
+    let v = args.pop_front().unwrap().value_as::<SymContainer>()?;
 
-//     let is_empty = match &v {
-//       Container::U8(v) => v.is_empty(),
-//       Container::U64(v) => v.is_empty(),
-//       Container::U128(v) => v.is_empty(),
-//       Container::Bool(v) => v.is_empty(),
+    // let cost = native_gas(context.cost_table(), NativeCostIndex::DESTROY_EMPTY, 1);
 
-//       Container::General(v) => v.is_empty(),
-//     };
+    check_elem_layout(&ty_args[0], &v)?;
 
-//     if is_empty {
-//       Ok(NativeResult::ok(cost, vec![]))
-//     } else {
-//       Ok(NativeResult::err(
-//         cost,
-//         VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(DESTROY_NON_EMPTY_VEC),
-//       ))
-//     }
-//   }
+    let is_empty = match &v.container {
+      SymContainerImpl::U8(v) => v.is_empty(),
+      SymContainerImpl::U64(v) => v.is_empty(),
+      SymContainerImpl::U128(v) => v.is_empty(),
+      SymContainerImpl::Bool(v) => v.is_empty(),
 
-//   pub fn native_swap(
-//     context: &impl NativeContext,
-//     ty_args: Vec<Type>,
-//     mut args: VecDeque<Value>,
-//   ) -> VMResult<NativeResult> {
-//     debug_assert!(ty_args.len() == 1);
-//     debug_assert!(args.len() == 3);
-//     let r = pop_arg_front!(args, ContainerRef);
-//     let idx1 = pop_arg_front!(args, u64) as usize;
-//     let idx2 = pop_arg_front!(args, u64) as usize;
+      SymContainerImpl::General(v) => v.is_empty(),
+    };
 
-//     let cost = native_gas(context.cost_table(), NativeCostIndex::SWAP, 1);
+    if is_empty {
+      Ok(SymNativeResult::ok(/* cost, */vec![]))
+    } else {
+      Ok(SymNativeResult::err(
+        // cost,
+        VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(DESTROY_NON_EMPTY_VEC),
+      ))
+    }
+  }
 
-//     let mut v = r.borrow_mut();
-//     check_elem_layout(&ty_args[0], &*v)?;
+  // !!! symbolic index?
+  // pub fn native_swap<'ctx>(
+  //   context: &impl SymNativeContext<'ctx>,
+  //   ty_args: Vec<Type>,
+  //   mut args: VecDeque<SymValue<'ctx>>,
+  // ) -> VMResult<SymNativeResult<'ctx>> {
+  //   debug_assert!(ty_args.len() == 1);
+  //   debug_assert!(args.len() == 3);
+  //   let r = pop_arg_front!(args, SymContainerRef);
+  //   let idx1 = pop_arg_front!(args, u64) as usize;
+  //   let idx2 = pop_arg_front!(args, u64) as usize;
 
-//     macro_rules! swap {
-//       ($v: ident) => {{
-//         if idx1 >= $v.len() || idx2 >= $v.len() {
-//           return Ok(NativeResult::err(
-//             cost,
-//             VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
-//           ));
-//         }
-//         $v.swap(idx1, idx2);
-//       }};
-//     }
+  //   let cost = native_gas(context.cost_table(), NativeCostIndex::SWAP, 1);
 
-//     match &mut *v {
-//       Container::U8(v) => swap!(v),
-//       Container::U64(v) => swap!(v),
-//       Container::U128(v) => swap!(v),
-//       Container::Bool(v) => swap!(v),
-//       Container::General(v) => swap!(v),
-//     }
+  //   let mut v = r.borrow_mut();
+  //   check_elem_layout(&ty_args[0], &*v)?;
 
-//     Ok(NativeResult::ok(cost, vec![]))
-//   }
-// }
+  //   macro_rules! swap {
+  //     ($v: ident) => {{
+  //       if idx1 >= $v.len() || idx2 >= $v.len() {
+  //         return Ok(SymNativeResult::err(
+  //           cost,
+  //           VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
+  //         ));
+  //       }
+  //       $v.swap(idx1, idx2);
+  //     }};
+  //   }
+
+  //   match &mut (*v).container {
+  //     SymContainerImpl::U8(v) => swap!(v),
+  //     SymContainerImpl::U64(v) => swap!(v),
+  //     SymContainerImpl::U128(v) => swap!(v),
+  //     SymContainerImpl::Bool(v) => swap!(v),
+  //     SymContainerImpl::General(v) => swap!(v),
+  //   }
+
+  //   Ok(SymNativeResult::ok(cost, vec![]))
+  // }
+}
 
 /***************************************************************************************
 *
@@ -2394,7 +2438,7 @@ impl<'ctx> Display for SymLocals<'ctx> {
 //       println!("[debug] {}", buf);
 //     }
 
-//     Ok(NativeResult::ok(ZERO_GAS_UNITS, vec![]))
+//     Ok(SymNativeResult::ok(ZERO_GAS_UNITS, vec![]))
 //   }
 
 //   #[allow(unused_variables)]
@@ -2412,7 +2456,7 @@ impl<'ctx> Display for SymLocals<'ctx> {
 //       println!("{}", s);
 //     }
 
-//     Ok(NativeResult::ok(ZERO_GAS_UNITS, vec![]))
+//     Ok(SymNativeResult::ok(ZERO_GAS_UNITS, vec![]))
 //   }
 // }
 

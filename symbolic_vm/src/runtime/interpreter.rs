@@ -4,10 +4,6 @@
 //   native_functions::FunctionContext,
 //   trace,
 // };
-use crate::runtime::{
-  loader::{Function, Loader, Resolver},
-  // native_functions::FunctionContext,
-};
 use libra_logger::prelude::*;
 use libra_types::{
   access_path::AccessPath,
@@ -27,6 +23,10 @@ use crate::{
     IntegerArithmeticPlugin,
     PluginManager,
   },
+  runtime::{
+    loader::{Function, Loader, Resolver},
+    native_functions::SymFunctionContext,
+  },
   state::{
     interpreter_state::SymInterpreterState,
     vm_context::SymbolicVMContext,
@@ -43,7 +43,7 @@ use nix::unistd::{fork, ForkResult};
 
 use std::{
   // cmp::min,
-  // collections::VecDeque,
+  collections::VecDeque,
   // fmt::Write,
   sync::Arc,
   // marker::PhantomData,
@@ -86,7 +86,7 @@ use z3::{Context, Solver, SatResult, Model};
 /// to do operations on data on chain and a `TransactionMetadata` which is also used to resolve
 /// specific opcodes.
 
-//??? pub(crate)
+// !!! for convenient currently the struct and fields are made public, fix it
 pub struct SymInterpreter<'vtxn, 'ctx> {
   /// Operand stack, where Move `SymValue`s are stored for stack operations.
   pub operand_stack: SymStack<'ctx>, //??? should not be pub
@@ -99,7 +99,7 @@ pub struct SymInterpreter<'vtxn, 'ctx> {
   /// Z3 solver
   pub solver: Solver<'ctx>,
   /// Intermediate state
-  state: SymInterpreterState<'ctx>, 
+  pub state: SymInterpreterState<'ctx>, 
 }
 
 impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
@@ -212,7 +212,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             // )?;
             let func = resolver.function_at(fh_idx);
             if func.is_native() {
-              // self.call_native(&resolver, context, func, vec![])?;
+              self.call_native(&resolver, vm_ctx, func, vec![])?;
               continue;
             }
             // TODO: when a native function is executed, the current frame has not yet
@@ -237,7 +237,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             let func = loader.function_at(func_inst.handle());
             let ty_args = func_inst.materialize(current_frame.ty_args())?;
             if func.is_native() {
-              // self.call_native(&resolver, context, func, ty_args)?;
+              self.call_native(&resolver, vm_ctx, func, ty_args)?;
               continue;
             }
             // TODO: when a native function is executed, the current frame has not yet
@@ -470,29 +470,29 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   }
 
   /// Call a native functions.
-  // fn call_native(
-  //   &mut self,
-  //   resolver: &Resolver,
-  //   context: &mut dyn SymbolicVMContext,
-  //   function: Arc<Function>,
-  //   ty_args: Vec<Type>,
-  // ) -> VMResult<()> {
-  //   let mut arguments = VecDeque::new();
-  //   let expected_args = function.arg_count();
-  //   for _ in 0..expected_args {
-  //     arguments.push_front(self.operand_stack.pop()?);
-  //   }
-  //   let mut native_context = FunctionContext::new(self, context, resolver);
-  //   let native_function = function.get_native()?;
-  //   let result = native_function.dispatch(&mut native_context, ty_args, arguments)?;
-  //   // gas!(consume: context, result.cost)?;
-  //   result.result.and_then(|values| {
-  //     for value in values {
-  //       self.operand_stack.push(value)?;
-  //     }
-  //     Ok(())
-  //   })
-  // }
+  fn call_native(
+    &mut self,
+    resolver: &Resolver,
+    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+    function: Arc<Function>,
+    ty_args: Vec<Type>,
+  ) -> VMResult<()> {
+    let mut arguments = VecDeque::new();
+    let expected_args = function.arg_count();
+    for _ in 0..expected_args {
+      arguments.push_front(self.operand_stack.pop()?);
+    }
+    let mut native_context = SymFunctionContext::new(self.state.get_z3_ctx(), self, vm_ctx, resolver);
+    let native_function = function.get_native()?;
+    let result = native_function.dispatch(&mut native_context, ty_args, arguments)?;
+    // gas!(consume: context, result.cost)?;
+    result.result.and_then(|values| {
+      for value in values {
+        self.operand_stack.push(value)?;
+      }
+      Ok(())
+    })
+  }
 
   /// Perform a binary operation to two values at the top of the stack.
   fn binop<F, T>(&mut self, f: F) -> VMResult<()>

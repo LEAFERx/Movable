@@ -26,7 +26,7 @@ use std::{
 use z3::Context;
 
 pub struct SymInterpreterState<'ctx> {
-  context: &'ctx Context,
+  z3_ctx: &'ctx Context,
 
   /// Gas metering to track cost of execution.
   gas_left: GasUnits<GasCarrier>,
@@ -40,15 +40,19 @@ pub struct SymInterpreterState<'ctx> {
 
 impl<'ctx> SymInterpreterState<'ctx> {
   pub(in crate::state) fn new(
-    context: &'ctx Context,
+    z3_ctx: &'ctx Context,
     gas_left: GasUnits<GasCarrier>,
   ) -> Self {
     Self {
-      context,
+      z3_ctx,
       gas_left,
       event_data: Vec::new(),
       data_map: BTreeMap::new(),
     }
+  }
+
+  pub fn get_z3_ctx(&self) -> &'ctx Context {
+    self.z3_ctx
   }
 
   // Gas
@@ -233,7 +237,7 @@ impl<'ctx> SymInterpreterState<'ctx> {
 impl<'ctx> Clone for SymInterpreterState<'ctx> {
   fn clone(&self) -> Self {
     Self {
-      context: self.context,
+      z3_ctx: self.z3_ctx,
       gas_left: self.gas_left,
       event_data: self.event_data.clone(),
       data_map: self.data_map.iter().map(|(key, value)| {
