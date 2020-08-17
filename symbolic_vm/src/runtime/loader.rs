@@ -1145,6 +1145,10 @@ impl Function {
     &self.parameters
   }
 
+  pub(crate) fn returns(&self) -> &Signature {
+    &self.return_
+  }
+
   pub(crate) fn pretty_string(&self) -> String {
     match &self.scope {
       Scope::Script(_) => "Script::main".into(),

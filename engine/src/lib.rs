@@ -1,6 +1,6 @@
 use libra_types::account_address::AccountAddress;
 
-use language_e2e_tests::data_store::{FakeDataStore, GENESIS_CHANGE_SET_FRESH};
+use language_e2e_tests::data_store::{FakeDataStore, GENESIS_CHANGE_SET};
 use move_core_types::{
   gas_schedule::{GasAlgebra, GasUnits},
   identifier::IdentStr,
@@ -40,7 +40,7 @@ impl Engine {
     };
     engine
       .data_store
-      .add_write_set(GENESIS_CHANGE_SET_FRESH.clone().write_set());
+      .add_write_set(GENESIS_CHANGE_SET.clone().write_set());
     engine
   }
 
@@ -54,7 +54,9 @@ impl Engine {
     let vm = SymbolicVM::new(&context);
     let data_cache = BlockDataCache::new(&self.data_store);
     let mut vm_ctx = SymbolicVMContext::new(&context, GasUnits::new(0), &data_cache);
-    vm.execute_function(module, function_name, &mut vm_ctx, &TransactionMetadata::default())
+    let mut metadata = TransactionMetadata::default();
+    metadata.sender = AccountAddress::random();
+    vm.execute_function(module, function_name, &mut vm_ctx, &metadata)
       .expect("VM should run correctly");
   }
 }

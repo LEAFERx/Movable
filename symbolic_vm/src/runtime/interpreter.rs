@@ -181,7 +181,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     mut self,
     loader: &Loader,
     vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    manager: &mut PluginManager,
+    manager: &mut PluginManager<'_, 'ctx>,
   ) -> VMResult<SymInterpreterExecutionResult<'vtxn, 'ctx>> {
     if let Some(mut current_frame) = self.call_stack.pop() {
       loop {
@@ -211,6 +211,9 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             //   AbstractMemorySize::new(1 as GasCarrier)
             // )?;
             let func = resolver.function_at(fh_idx);
+            if manager.before_call(vm_ctx, loader, &mut self, func.as_ref(), vec![])? {
+              continue;
+            }
             if func.is_native() {
               self.call_native(&resolver, vm_ctx, func, vec![])?;
               continue;
@@ -236,6 +239,9 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             // )?;
             let func = loader.function_at(func_inst.handle());
             let ty_args = func_inst.materialize(current_frame.ty_args())?;
+            if manager.before_call(vm_ctx, loader, &mut self, func.as_ref(), ty_args.clone())? {
+              continue;
+            }
             if func.is_native() {
               self.call_native(&resolver, vm_ctx, func, ty_args)?;
               continue;
@@ -965,7 +971,7 @@ impl<'ctx> SymFrame<'ctx> {
     resolver: &Resolver,
     interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    manager: &mut PluginManager
+    manager: &mut PluginManager<'_, 'ctx>
   ) -> VMResult<ExitCode<'ctx>> {
     let code = self.function.code();
     loop {
@@ -1293,7 +1299,7 @@ impl<'ctx> SymFrame<'ctx> {
               None => {
                 let msg = format!(
                   "With Symbolic Error Code {:?}, {} at offset {}",
-                  error_code,
+                  sym_error_code,
                   self.function.pretty_string(),
                   self.pc,
                 );
