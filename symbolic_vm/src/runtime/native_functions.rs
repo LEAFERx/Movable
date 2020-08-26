@@ -100,8 +100,8 @@ impl NativeFunction {
       // Self::VectorBorrowMut => vector::native_borrow(ctx, t, v),
       Self::VectorPushBack => vector::native_push_back(ctx, t, v),
       Self::VectorPopBack => vector::native_pop(ctx, t, v),
-      Self::VectorDestroyEmpty => vector::native_destroy_empty(ctx, t, v),
-      // Self::VectorSwap => vector::native_swap(ctx, t, v),
+      // Self::VectorDestroyEmpty => vector::native_destroy_empty(ctx, t, v),
+      Self::VectorSwap => vector::native_swap(ctx, t, v),
       // natives that need the full API of `NativeContext`
       // Self::AccountWriteEvent => event::native_emit_event(ctx, t, v),
       // Self::AccountSaveAccount => account::native_save_account(ctx, t, v),

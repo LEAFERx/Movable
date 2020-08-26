@@ -1,7 +1,6 @@
 use libra_types::{
   account_address::AccountAddress,
   vm_error::{
-    sub_status::NFE_VECTOR_ERROR_BASE,
     StatusCode,
     VMStatus,
   },
@@ -17,10 +16,7 @@ use move_vm_types::{
 };
 use std::{
   cell::{Ref, RefCell, RefMut},
-  collections::VecDeque,
   fmt::{self, Debug, Display},
-  iter,
-  mem::size_of,
   ops::Add,
   rc::Rc,
 };
@@ -35,10 +31,12 @@ use z3::{
 };
 
 use crate::types::{
-  natives::SymNativeResult,
   values::{
     account_address::SymAccountAddress,
     primitives::{SymBool, SymU128, SymU64, SymU8},
+    struct_impl::SymStructImpl,
+    vector::SymVectorImpl,
+    SymbolicMoveValue,
   },
 };
 
@@ -54,7 +52,7 @@ use crate::types::{
 
 /// Runtime representation of a Move value.
 #[derive(Debug)]
-enum SymValueImpl<'ctx> {
+pub(super) enum SymValueImpl<'ctx> {
   Invalid,
 
   U8(SymU8<'ctx>),
@@ -79,26 +77,34 @@ enum SymValueImpl<'ctx> {
 ///
 /// Except when not owned by the VM stack, a container always lives inside an Rc<RefCell<>>,
 /// making it possible to be shared by references.
-#[derive(Debug)]
-enum SymContainerImpl<'ctx> {
-  General(Vec<SymValueImpl<'ctx>>),
-  U8(Vec<SymU8<'ctx>>),
-  U64(Vec<SymU64<'ctx>>),
-  U128(Vec<SymU128<'ctx>>),
-  Bool(Vec<SymBool<'ctx>>),
-}
+// #[derive(Debug)]
+// pub(super) enum SymContainerImpl<'ctx> {
+//   General(Vec<SymValueImpl<'ctx>>),
+//   U8(Vec<SymU8<'ctx>>),
+//   U64(Vec<SymU64<'ctx>>),
+//   U128(Vec<SymU128<'ctx>>),
+//   Bool(Vec<SymBool<'ctx>>),
+// }
 
 #[derive(Debug)]
-struct SymContainer<'ctx> {
-  context: &'ctx Context,
-  container: SymContainerImpl<'ctx>,
+pub(super) enum SymContainer<'ctx> {
+  Locals {
+    context: &'ctx Context,
+    locals: Vec<SymValueImpl<'ctx>>,
+  },
+  Struct(SymStructImpl<'ctx>),
+  Vector(SymVectorImpl<'ctx>),
+  VecU8(SymVectorImpl<'ctx>),
+  VecU64(SymVectorImpl<'ctx>),
+  VecU128(SymVectorImpl<'ctx>),
+  VecBool(SymVectorImpl<'ctx>),
 }
 
 /// A ContainerRef is a direct reference to a container, which could live either in the frame
 /// or in global storage. In the latter case, it also keeps a status flag indicating whether
 /// the container has been possibly modified.
 #[derive(Debug)]
-enum SymContainerRef<'ctx> {
+pub(super) enum SymContainerRef<'ctx> {
   Local(Rc<RefCell<SymContainer<'ctx>>>),
   Global {
     status: Rc<RefCell<GlobalDataStatus>>,
@@ -110,16 +116,16 @@ enum SymContainerRef<'ctx> {
 /// Clean - the data was only read.
 /// Dirty - the data was possibly modified.
 #[derive(Debug, Clone, Copy)]
-enum GlobalDataStatus {
+pub(super) enum GlobalDataStatus {
   Clean,
   Dirty,
 }
 
 /// A Move reference pointing to an element in a container.
 #[derive(Debug)]
-struct SymIndexedRef<'ctx> {
-  idx: usize,
-  container_ref: SymContainerRef<'ctx>,
+pub(super) struct SymIndexedRef<'ctx> {
+  pub(super) idx: usize,
+  pub(super) container_ref: SymContainerRef<'ctx>,
 }
 
 /// An umbrella enum for references. It is used to hide the internals of the public type
@@ -157,12 +163,7 @@ pub struct SymReference<'ctx>(SymReferenceImpl<'ctx>);
 /// A Move value -- a wrapper around `SymValueImpl<'ctx>` which can be created only through valid
 /// means.
 #[derive(Debug)]
-pub struct SymValue<'ctx>(SymValueImpl<'ctx>);
-
-/// The locals for a function frame. It allows values to be read, written or taken
-/// reference from.
-#[derive(Debug)]
-pub struct SymLocals<'ctx>(Rc<RefCell<SymContainer<'ctx>>>);
+pub struct SymValue<'ctx>(pub(super) SymValueImpl<'ctx>);
 
 /// An integer value in Move.
 #[derive(Debug)]
@@ -201,49 +202,30 @@ pub struct SymGlobalValue<'ctx> {
 *   Miscellaneous helper functions.
 *
 **************************************************************************************/
-impl<'ctx> SymContainerImpl<'ctx> {
-  fn len(&self) -> usize {
-    use SymContainerImpl::*;
+impl<'ctx> SymContainer<'ctx> {
+  pub(super) fn len(&self) -> usize {
+    use SymContainer::*;
 
     match self {
-      General(v) => v.len(),
-      U8(v) => v.len(),
-      U64(v) => v.len(),
-      U128(v) => v.len(),
-      Bool(v) => v.len(),
+      // !!! figure it out
+      Locals { locals, .. } => locals.len(),
+      Struct(v) => v.len(),
+      Vector(_v) => 0, // v.len(),
+      VecU8(_v) => 0, // v.len(),
+      VecU64(_v) => 0, // v.len(),
+      VecU128(_v) => 0, // v.len(),
+      VecBool(_v) => 0, // v.len(),
     }
-  }
-}
-
-impl<'ctx> SymContainer<'ctx> {
-  fn len(&self) -> usize {
-    self.container.len()
   }
 }
 
 impl<'ctx> SymValueImpl<'ctx> {
-  fn into_ast(self) -> VMResult<Dynamic<'ctx>> {
-    match self {
-      SymValueImpl::U8(u) => Ok(u.collect()),
-      SymValueImpl::U64(u) => Ok(u.collect()),
-      SymValueImpl::U128(u) => Ok(u.collect()),
-      SymValueImpl::Bool(b) => Ok(b.collect()),
-      _ => {
-        let msg = format!("Cannot convert {:?} to ast.", self);
-        Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
-      }
-    }
-  }
-  fn new_container(container: SymContainer<'ctx>) -> Self {
+  pub(super) fn new_container(container: SymContainer<'ctx>) -> Self {
     Self::Container(Rc::new(RefCell::new(container)))
   }
 }
 
 impl<'ctx> SymValue<'ctx> {
-  pub fn into_ast(self) -> VMResult<Dynamic<'ctx>> {
-    self.0.into_ast()
-  }
-
   pub fn is_valid_script_arg(&self, sig: &SignatureToken) -> bool {
     match (sig, &self.0) {
       (SignatureToken::U8, SymValueImpl::U8(_)) => true,
@@ -252,8 +234,8 @@ impl<'ctx> SymValue<'ctx> {
       (SignatureToken::Bool, SymValueImpl::Bool(_)) => true,
       (SignatureToken::Address, SymValueImpl::Address(_)) => true,
       (SignatureToken::Vector(ty), SymValueImpl::Container(r)) => {
-        match (&**ty, &(*r.borrow()).container) {
-          (SignatureToken::U8, SymContainerImpl::U8(_)) => true,
+        match (&**ty, &*r.borrow()) {
+          (SignatureToken::U8, SymContainer::VecU8(_)) => true,
           _ => false,
         }
       }
@@ -282,13 +264,13 @@ fn take_unique_ownership<T: Debug>(r: Rc<RefCell<T>>) -> VMResult<T> {
 }
 
 impl<'ctx> SymContainerRef<'ctx> {
-  fn borrow(&self) -> Ref<SymContainer<'ctx>> {
+  pub(super) fn borrow(&self) -> Ref<SymContainer<'ctx>> {
     match self {
       Self::Local(container) | Self::Global { container, .. } => container.borrow(),
     }
   }
 
-  fn borrow_mut(&self) -> RefMut<SymContainer<'ctx>> {
+  pub(super) fn borrow_mut(&self) -> RefMut<SymContainer<'ctx>> {
     match self {
       Self::Local(container) => container.borrow_mut(),
       Self::Global { container, status } => {
@@ -336,14 +318,14 @@ impl_vm_value_ref!(SymU128<'ctx>, U128);
 impl_vm_value_ref!(SymBool<'ctx>, Bool);
 impl_vm_value_ref!(SymAccountAddress<'ctx>, Address);
 
-impl<'ctx> SymValueImpl<'ctx> {
-  fn as_value_ref<T>(&self) -> VMResult<&T>
-  where
-    Self: VMValueRef<T>,
-  {
-    VMValueRef::value_ref(self)
-  }
-}
+// impl<'ctx> SymValueImpl<'ctx> {
+//   fn as_value_ref<T>(&self) -> VMResult<&T>
+//   where
+//     Self: VMValueRef<T>,
+//   {
+//     VMValueRef::value_ref(self)
+//   }
+// }
 
 /***************************************************************************************
 *
@@ -355,7 +337,7 @@ impl<'ctx> SymValueImpl<'ctx> {
 *
 **************************************************************************************/
 impl<'ctx> SymValueImpl<'ctx> {
-  fn copy_value(&self) -> Self {
+  pub(super) fn copy_value(&self) -> Self {
     use SymValueImpl::*;
 
     match self {
@@ -379,25 +361,21 @@ impl<'ctx> SymValueImpl<'ctx> {
   }
 }
 
-impl<'ctx> SymContainerImpl<'ctx> {
-  fn copy_value(&self) -> Self {
-    use SymContainerImpl::*;
+impl<'ctx> SymContainer<'ctx> {
+  pub(super) fn copy_value(&self) -> Self {
+    use SymContainer::*;
 
     match self {
-      General(v) => General(v.iter().map(|x| x.copy_value()).collect()),
-      U8(v) => U8(v.clone()),
-      U64(v) => U64(v.clone()),
-      U128(v) => U128(v.clone()),
-      Bool(v) => Bool(v.clone()),
-    }
-  }
-}
-
-impl<'ctx> SymContainer<'ctx> {
-  fn copy_value(&self) -> Self {
-    Self {
-      context: self.context,
-      container: self.container.copy_value(),
+      Locals { context, locals } => Locals {
+        context,
+        locals: locals.iter().map(|x| x.copy_value()).collect(),
+      },
+      Struct(v) => Struct(v.copy_value()),
+      Vector(v) => Vector(v.copy_value()),
+      VecU8(v) => Vector(v.copy_value()),
+      VecU64(v) => Vector(v.copy_value()),
+      VecU128(v) => Vector(v.copy_value()),
+      VecBool(v) => Vector(v.copy_value()),
     }
   }
 }
@@ -477,59 +455,27 @@ impl<'ctx> SymValueImpl<'ctx> {
 
 impl<'ctx> SymContainer<'ctx> {
   fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
-    use SymContainerImpl::*;
+    use SymContainer::*;
 
-    let res = match (&self.container, &other.container) {
-      (General(l), General(r)) => {
+    let res = match (&self, &other) {
+      // Let's just assume context is equal for same <'ctx>
+      (Locals { context, locals: l }, Locals { locals: r, .. }) => {
         if l.len() != r.len() {
-          return Ok(SymBool::from(self.context, false));
+          return Ok(SymBool::from(context, false));
         }
-        let mut res = SymBool::from(self.context, true);
+        let mut res = SymBool::from(context, true);
         for (v1, v2) in l.iter().zip(r.iter()) {
           res = res.and(&v1.equals(v2)?);
         }
         res
       }
-      (U8(l), U8(r)) => {
-        if l.len() != r.len() {
-          return Ok(SymBool::from(self.context, false));
-        }
-        let mut res = SymBool::from(self.context, true);
-        for (v1, v2) in l.iter().zip(r.iter()) {
-          res = res.and(&v1.equals(v2)?);
-        }
-        res
-      }
-      (U64(l), U64(r)) => {
-        if l.len() != r.len() {
-          return Ok(SymBool::from(self.context, false));
-        }
-        let mut res = SymBool::from(self.context, true);
-        for (v1, v2) in l.iter().zip(r.iter()) {
-          res = res.and(&v1.equals(v2)?);
-        }
-        res
-      }
-      (U128(l), U128(r)) => {
-        if l.len() != r.len() {
-          return Ok(SymBool::from(self.context, false));
-        }
-        let mut res = SymBool::from(self.context, true);
-        for (v1, v2) in l.iter().zip(r.iter()) {
-          res = res.and(&v1.equals(v2)?);
-        }
-        res
-      }
-      (Bool(l), Bool(r)) => {
-        if l.len() != r.len() {
-          return Ok(SymBool::from(self.context, false));
-        }
-        let mut res = SymBool::from(self.context, true);
-        for (v1, v2) in l.iter().zip(r.iter()) {
-          res = res.and(&v1.equals(v2)?);
-        }
-        res
-      }
+      (Struct(l), Struct(r)) => SymBool::from_ast(l.equals(r)),
+      (Vector(l), Vector(r)) 
+      | (VecU8(l), VecU8(r))
+      | (VecU64(l), VecU64(r))
+      | (VecU128(l), VecU128(r))
+      | (VecBool(l), VecBool(r))
+      => SymBool::from_ast(l.equals(r)),
       _ => {
         return Err(
           VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!(
@@ -551,55 +497,34 @@ impl<'ctx> SymContainerRef<'ctx> {
 }
 
 impl<'ctx> SymIndexedRef<'ctx> {
+  // This function may not implement exact the same semantics of `equals` as the `SymContainer` is using
+  // data structure like current(2020.08.24) Move but symplified. However, it should be ok in most cases.
   fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
-    use SymContainerImpl::*;
+    use SymContainer::*;
 
-    let res = match (
-      &(*self.container_ref.borrow()).container,
-      &(*other.container_ref.borrow()).container,
-    ) {
-      (General(v1), General(v2)) => v1[self.idx].equals(&v2[other.idx])?,
-      (U8(v1), U8(v2)) => v1[self.idx].equals(&v2[other.idx])?,
-      (U64(v1), U64(v2)) => v1[self.idx].equals(&v2[other.idx])?,
-      (U128(v1), U128(v2)) => v1[self.idx].equals(&v2[other.idx])?,
-      (Bool(v1), Bool(v2)) => v1[self.idx].equals(&v2[other.idx])?,
+    macro_rules! eq {
+      ($v1: expr) => {
+        match &*other.container_ref.borrow() {
+          Locals { locals: v2, ..} => $v1.equals(&v2[other.idx]),
+          Struct(v2) => $v1.equals(&v2.get(self.idx)?.0),
+          Vector(v2)
+          | VecU8(v2)
+          | VecU64(v2)
+          | VecU128(v2)
+          | VecBool(v2) => $v1.equals(&v2.get_concrete(self.idx)?.0),
+        }
+      };
+    }
 
-      // Equality between a generic and a specialized container.
-      (General(v1), U8(v2)) => v1[self.idx]
-        .as_value_ref::<SymU8<'ctx>>()?
-        .equals(&v2[other.idx])?,
-      (U8(v1), General(v2)) => v1[self.idx].equals(v2[other.idx].as_value_ref::<SymU8<'ctx>>()?)?,
-
-      (General(v1), U64(v2)) => v1[self.idx]
-        .as_value_ref::<SymU64<'ctx>>()?
-        .equals(&v2[other.idx])?,
-      (U64(v1), General(v2)) => {
-        v1[self.idx].equals(v2[other.idx].as_value_ref::<SymU64<'ctx>>()?)?
-      }
-
-      (General(v1), U128(v2)) => v1[self.idx]
-        .as_value_ref::<SymU128<'ctx>>()?
-        .equals(&v2[other.idx])?,
-      (U128(v1), General(v2)) => {
-        v1[self.idx].equals(v2[other.idx].as_value_ref::<SymU128<'ctx>>()?)?
-      }
-
-      (General(v1), Bool(v2)) => v1[self.idx]
-        .as_value_ref::<SymBool<'ctx>>()?
-        .equals(&v2[other.idx])?,
-      (Bool(v1), General(v2)) => {
-        v1[self.idx].equals(v2[other.idx].as_value_ref::<SymBool<'ctx>>()?)?
-      }
-
-      // All other combinations are illegal.
-      _ => {
-        return Err(
-          VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR)
-            .with_message(format!("cannot compare references {:?}, {:?}", self, other)),
-        )
-      }
-    };
-    Ok(res)
+    match &*self.container_ref.borrow() {
+      Locals { locals: v1, ..} => eq!(v1[self.idx]),
+      Struct(v) => eq!(v.get(self.idx)?.0),
+      Vector(v)
+      | VecU8(v)
+      | VecU64(v)
+      | VecU128(v)
+      | VecBool(v) => eq!(v.get_concrete(self.idx)?.0),
+    }
   }
 }
 
@@ -627,17 +552,19 @@ impl<'ctx> SymContainerRef<'ctx> {
 
 impl<'ctx> SymIndexedRef<'ctx> {
   fn read_ref(self) -> VMResult<SymValue<'ctx>> {
-    use SymContainerImpl::*;
+    use SymContainer::*;
 
-    let res = match &(*self.container_ref.borrow()).container {
-      General(v) => v[self.idx].copy_value(),
-      U8(v) => SymValueImpl::U8(v[self.idx].clone()),
-      U64(v) => SymValueImpl::U64(v[self.idx].clone()),
-      U128(v) => SymValueImpl::U128(v[self.idx].clone()),
-      Bool(v) => SymValueImpl::Bool(v[self.idx].clone()),
+    let res = match &*self.container_ref.borrow() {
+      Locals { locals: v, ..} => SymValue(v[self.idx].copy_value()),
+      Struct(v) => v.get(self.idx)?,
+      Vector(v)
+      | VecU8(v)
+      | VecU64(v)
+      | VecU128(v)
+      | VecBool(v) => v.get_concrete(self.idx)?,
     };
 
-    Ok(SymValue(res))
+    Ok(res)
   }
 }
 
@@ -707,14 +634,16 @@ impl<'ctx> SymIndexedRef<'ctx> {
       _ => (),
     }
 
-    match (&mut (*self.container_ref.borrow_mut()).container, &x.0) {
-      (SymContainerImpl::General(v), _) => {
+    match (&mut *self.container_ref.borrow_mut(), &x.0) {
+      (SymContainer::Locals { locals: v, .. }, _) => {
         v[self.idx] = x.0;
       }
-      (SymContainerImpl::U8(v), SymValueImpl::U8(x)) => v[self.idx] = x.clone(),
-      (SymContainerImpl::U64(v), SymValueImpl::U64(x)) => v[self.idx] = x.clone(),
-      (SymContainerImpl::U128(v), SymValueImpl::U128(x)) => v[self.idx] = x.clone(),
-      (SymContainerImpl::Bool(v), SymValueImpl::Bool(x)) => v[self.idx] = x.clone(),
+      (SymContainer::Struct(v), _) => v.set(self.idx, x)?,
+      (SymContainer::Vector(v), _)
+      | (SymContainer::VecU8(v), SymValueImpl::U8(_))
+      | (SymContainer::VecU64(v), SymValueImpl::U64(_))
+      | (SymContainer::VecU128(v), SymValueImpl::U128(_))
+      | (SymContainer::VecBool(v), SymValueImpl::Bool(_)) => v.set_concrete(self.idx, x)?,
       _ => {
         return Err(
           VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!(
@@ -753,7 +682,7 @@ impl<'ctx> SymReference<'ctx> {
 **************************************************************************************/
 
 impl<'ctx> SymContainerRef<'ctx> {
-  fn borrow_elem(&self, idx: usize) -> VMResult<SymValueImpl<'ctx>> {
+  pub(super) fn borrow_elem(&self, idx: usize) -> VMResult<SymValueImpl<'ctx>> {
     let r = self.borrow();
 
     if idx >= r.len() {
@@ -766,8 +695,9 @@ impl<'ctx> SymContainerRef<'ctx> {
       );
     }
 
-    let res = match &(*r).container {
-      SymContainerImpl::General(v) => match &v[idx] {
+    // TODO: Currently except locals all ref is in indexed ref, it seems ok to me but nee further consideration.
+    let res = match &*r {
+      SymContainer::Locals { locals: v, .. } => match &v[idx] {
         // TODO: check for the impossible combinations.
         SymValueImpl::Container(container) => {
           let r = match self {
@@ -797,145 +727,6 @@ impl<'ctx> SymContainerRef<'ctx> {
 impl<'ctx> SymStructRef<'ctx> {
   pub fn borrow_field(&self, idx: usize) -> VMResult<SymValue<'ctx>> {
     Ok(SymValue(self.0.borrow_elem(idx)?))
-  }
-}
-
-impl<'ctx> SymLocals<'ctx> {
-  pub fn borrow_loc(&self, idx: usize) -> VMResult<SymValue<'ctx>> {
-    // TODO: this is very similar to SharedContainer::borrow_elem. Find a way to
-    // reuse that code?
-
-    let r = self.0.borrow();
-
-    if idx >= r.len() {
-      return Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(format!(
-          "index out of bounds when borrowing local: got: {}, len: {}",
-          idx,
-          r.len()
-        )),
-      );
-    }
-
-    match &(*r).container {
-      SymContainerImpl::General(v) => match &v[idx] {
-        SymValueImpl::Container(r) => Ok(SymValue(SymValueImpl::ContainerRef(
-          SymContainerRef::Local(Rc::clone(r)),
-        ))),
-
-        SymValueImpl::U8(_)
-        | SymValueImpl::U64(_)
-        | SymValueImpl::U128(_)
-        | SymValueImpl::Bool(_)
-        | SymValueImpl::Address(_)
-        | SymValueImpl::Signer(_) => Ok(SymValue(SymValueImpl::IndexedRef(SymIndexedRef {
-          container_ref: SymContainerRef::Local(Rc::clone(&self.0)),
-          idx,
-        }))),
-
-        SymValueImpl::ContainerRef(_) | SymValueImpl::Invalid | SymValueImpl::IndexedRef(_) => Err(
-          VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-            .with_message(format!("cannot borrow local {:?}", &v[idx])),
-        ),
-      },
-      v => Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-          .with_message(format!("bad container for locals: {:?}", v)),
-      ),
-    }
-  }
-}
-
-/***************************************************************************************
-*
-* Locals
-*
-*   Public APIs for Locals to support reading, writing and moving of values.
-*
-**************************************************************************************/
-impl<'ctx> SymLocals<'ctx> {
-  pub fn new(context: &'ctx Context, n: usize) -> Self {
-    Self(Rc::new(RefCell::new(SymContainer {
-      context,
-      container: SymContainerImpl::General(
-        iter::repeat_with(|| SymValueImpl::Invalid)
-          .take(n)
-          .collect(),
-      ),
-    })))
-  }
-
-  pub fn copy_loc(&self, idx: usize) -> VMResult<SymValue<'ctx>> {
-    let r = self.0.borrow();
-    let v = match &(*r).container {
-      SymContainerImpl::General(v) => v,
-      _ => unreachable!(),
-    };
-
-    match v.get(idx) {
-      Some(SymValueImpl::Invalid) => Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-          .with_message(format!("cannot copy invalid value at index {}", idx)),
-      ),
-      Some(v) => Ok(SymValue(v.copy_value())),
-      None => Err(
-        VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(format!(
-          "local index out of bounds: got {}, len: {}",
-          idx,
-          v.len()
-        )),
-      ),
-    }
-  }
-
-  fn swap_loc(&mut self, idx: usize, x: SymValue<'ctx>) -> VMResult<SymValue<'ctx>> {
-    let mut r = self.0.borrow_mut();
-    let v = match &mut (*r).container {
-      SymContainerImpl::General(v) => v,
-      _ => unreachable!(),
-    };
-
-    match v.get_mut(idx) {
-      Some(v) => {
-        if let SymValueImpl::Container(r) = v {
-          if Rc::strong_count(r) > 1 {
-            return Err(
-              VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-                .with_message("moving container with dangling references".to_string()),
-            );
-          }
-        }
-        Ok(SymValue(std::mem::replace(v, x.0)))
-      }
-      None => Err(
-        VMStatus::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(format!(
-          "local index out of bounds: got {}, len: {}",
-          idx,
-          v.len()
-        )),
-      ),
-    }
-  }
-
-  pub fn move_loc(&mut self, idx: usize) -> VMResult<SymValue<'ctx>> {
-    match self.swap_loc(idx, SymValue(SymValueImpl::Invalid))? {
-      SymValue(SymValueImpl::Invalid) => Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-          .with_message(format!("cannot move invalid value at index {}", idx)),
-      ),
-      v => Ok(v),
-    }
-  }
-
-  pub fn store_loc(&mut self, idx: usize, x: SymValue<'ctx>) -> VMResult<()> {
-    self.swap_loc(idx, x)?;
-    Ok(())
-  }
-}
-
-impl<'ctx> Clone for SymLocals<'ctx> {
-  fn clone(&self) -> Self {
-    SymLocals(Rc::new(RefCell::new(self.0.borrow().copy_value())))
   }
 }
 
@@ -971,6 +762,79 @@ impl<'ctx> SymValue<'ctx> {
           ty
         )),
       ),
+    }
+  }
+
+  pub fn from_ast_with_type_info(
+    context: &'ctx Context,
+    ast: Dynamic<'ctx>,
+    ty: &FatType
+  ) -> VMResult<Self> {
+    match ty {
+      FatType::Bool => {
+        let ast = ast.as_bool().ok_or(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("{:?} can not be made into Bool", ast))
+        )?;
+        Ok(SymValue::from_sym_bool(SymBool::from_ast(ast)))
+      }
+      FatType::U8 => {
+        let ast = ast.as_bv().ok_or(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("{:?} can not be made into Bool", ast))
+        )?;
+        Ok(SymValue::from_sym_u8(SymU8::from_ast(ast)))
+      }
+      FatType::U64 => {
+        let ast = ast.as_bv().ok_or(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("{:?} can not be made into Bool", ast))
+        )?;
+        Ok(SymValue::from_sym_u64(SymU64::from_ast(ast)))
+      }
+      FatType::U128 => {
+        let ast = ast.as_bv().ok_or(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("{:?} can not be made into Bool", ast))
+        )?;
+        Ok(SymValue::from_sym_u128(SymU128::from_ast(ast)))
+      }
+      FatType::Address | FatType::Signer => {
+        let ast = ast.as_bv().ok_or(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("{:?} can not be made into Bool", ast))
+        )?;
+        let addr = SymAccountAddress::from_ast(ast);
+        Ok(SymValue::from_sym_address(addr))
+      }
+      FatType::Vector(ty) => {
+        let ast = ast.as_datatype().ok_or(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("{:?} can not be made into Bool", ast))
+        )?;
+        let res = match ty.as_ref() {
+          ty @ FatType::U8 => SymValue::from_sym_vec_u8(SymVectorImpl::from_ast(context, ty, ast)?),
+          ty @ FatType::U64 => SymValue::from_sym_vec_u64(SymVectorImpl::from_ast(context, ty, ast)?),
+          ty @ FatType::U128 => SymValue::from_sym_vec_u128(SymVectorImpl::from_ast(context, ty, ast)?),
+          ty @ FatType::Bool => SymValue::from_sym_vec_bool(SymVectorImpl::from_ast(context, ty, ast)?),
+          ty @ _ => SymValue::from_sym_vector(SymVectorImpl::from_ast(context, ty, ast)?),
+        };
+        Ok(res)
+      },
+      FatType::Struct(ty) => {
+        let ast = ast.as_datatype().ok_or(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("{:?} can not be made into Bool", ast))
+        )?;
+        let s = SymStructImpl::from_ast(context, ty.as_ref(), ast)?;
+        Ok(SymValue(SymValueImpl::new_container(SymContainer::Struct(s))))
+      },
+      FatType::Reference(_) | FatType::MutableReference(_) | FatType::TyParam(_) => {
+        Err(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("{:?} is invalid when calling SymValue::from_ast_with_type_info", ty))
+        )
+      }
     }
   }
 
@@ -1051,81 +915,101 @@ impl<'ctx> SymValue<'ctx> {
       .enumerate()
       .map(|(idx, v)| SymValue::from_deserialized_value(context, v, &ty.layout[idx]))
       .collect::<VMResult<_>>()?;
-    Ok(SymValue::from_sym_struct(SymStruct::pack(context, fields)))
+    Ok(SymValue::from_sym_struct(SymStruct::pack(context, &ty, fields)?))
   }
 
   pub fn from_sym_struct(s: SymStruct<'ctx>) -> Self {
     SymValue(SymValueImpl::new_container(s.0))
   }
 
+  pub(super) fn from_sym_vector(v: SymVectorImpl<'ctx>) -> Self {
+    SymValue(SymValueImpl::new_container(SymContainer::Vector(v)))
+  }
+
+  pub(super) fn from_sym_vec_u8(v: SymVectorImpl<'ctx>) -> Self {
+    SymValue(SymValueImpl::new_container(SymContainer::VecU8(v)))
+  }
+
+  pub(super) fn from_sym_vec_u64(v: SymVectorImpl<'ctx>) -> Self {
+    SymValue(SymValueImpl::new_container(SymContainer::VecU64(v)))
+  }
+
+  pub(super) fn from_sym_vec_u128(v: SymVectorImpl<'ctx>) -> Self {
+    SymValue(SymValueImpl::new_container(SymContainer::VecU128(v)))
+  }
+
+  pub(super) fn from_sym_vec_bool(v: SymVectorImpl<'ctx>) -> Self {
+    SymValue(SymValueImpl::new_container(SymContainer::VecBool(v)))
+  }
+
   // TODO: consider whether we want to replace these with fn vector(v: Vec<Value>).
   // pub fn vector_u8(it: impl IntoIterator<Item = u8>) -> Self {
-  //   Self(SymValueImpl::new_container(SymContainerImpl::U8(
+  //   Self(SymValueImpl::new_container(SymContainer::U8(
   //     it.into_iter().collect(),
   //   )))
   // }
 
   // pub fn vector_u64(it: impl IntoIterator<Item = u64>) -> Self {
-  //   Self(SymValueImpl::new_container(SymContainerImpl::U64(
+  //   Self(SymValueImpl::new_container(SymContainer::U64(
   //     it.into_iter().collect(),
   //   )))
   // }
 
   // pub fn vector_u128(it: impl IntoIterator<Item = u128>) -> Self {
-  //   Self(SymValueImpl::new_container(SymContainerImpl::U128(
+  //   Self(SymValueImpl::new_container(SymContainer::U128(
   //     it.into_iter().collect(),
   //   )))
   // }
 
   // pub fn vector_bool(it: impl IntoIterator<Item = bool>) -> Self {
-  //   Self(SymValueImpl::new_container(SymContainerImpl::Bool(
+  //   Self(SymValueImpl::new_container(SymContainer::Bool(
   //     it.into_iter().collect(),
   //   )))
   // }
 
   // pub fn vector_address(it: impl IntoIterator<Item = SymAccountAddress<'ctx>>) -> Self {
-  //   Self(SymValueImpl::new_container(SymContainerImpl::General(
+  //   Self(SymValueImpl::new_container(SymContainer::General(
   //     it.into_iter().map(SymValueImpl::Address).collect(),
   //   )))
   // }
 }
 
-impl<'ctx> SymContainer<'ctx> {
-  pub fn general(context: &'ctx Context, vec: Vec<SymValueImpl<'ctx>>) -> Self {
-    SymContainer {
-      context,
-      container: SymContainerImpl::General(vec),
-    }
-  }
+// impl<'ctx> SymContainer<'ctx> {
+//   pub fn general(context: &'ctx Context, vec: Vec<SymValueImpl<'ctx>>) -> Self {
+//     SymContainer {
+//       context,
+//       container: SymContainer::General(vec),
+//     }
+//   }
 
-  pub fn u8(context: &'ctx Context, vec: Vec<SymU8<'ctx>>) -> Self {
-    SymContainer {
-      context,
-      container: SymContainerImpl::U8(vec),
-    }
-  }
+//   pub fn u8(context: &'ctx Context, vec: Vec<SymU8<'ctx>>) -> Self {
+//     SymContainer {
+//       context,
+//       container: SymContainer::U8(vec),
+//     }
+//   }
 
-  pub fn u64(context: &'ctx Context, vec: Vec<SymU64<'ctx>>) -> Self {
-    SymContainer {
-      context,
-      container: SymContainerImpl::U64(vec),
-    }
-  }
+//   pub fn u64(context: &'ctx Context, vec: Vec<SymU64<'ctx>>) -> Self {
+//     SymContainer {
+//       context,
+//       container: SymContainer::U64(vec),
+//     }
+//   }
 
-  pub fn u128(context: &'ctx Context, vec: Vec<SymU128<'ctx>>) -> Self {
-    SymContainer {
-      context,
-      container: SymContainerImpl::U128(vec),
-    }
-  }
+//   pub fn u128(context: &'ctx Context, vec: Vec<SymU128<'ctx>>) -> Self {
+//     SymContainer {
+//       context,
+//       container: SymContainer::U128(vec),
+//     }
+//   }
   
-  pub fn bool(context: &'ctx Context, vec: Vec<SymBool<'ctx>>) -> Self {
-    SymContainer {
-      context,
-      container: SymContainerImpl::Bool(vec),
-    }
-  }
-}
+//   pub fn bool(context: &'ctx Context, vec: Vec<SymBool<'ctx>>) -> Self {
+//     SymContainer {
+//       context,
+//       container: SymContainer::Bool(vec),
+//     }
+//   }
+// }
 
 /***************************************************************************************
 *
@@ -1212,23 +1096,23 @@ impl<'ctx> VMSymValueCast<SymContainer<'ctx>> for SymValue<'ctx> {
 }
 
 // ???
-impl<'ctx> VMSymValueCast<Vec<SymValue<'ctx>>> for SymValue<'ctx> {
-  fn cast(self) -> VMResult<Vec<SymValue<'ctx>>> {
-    match self.0 {
-      SymValueImpl::Container(r) => Ok(match take_unique_ownership(r)?.container {
-        SymContainerImpl::General(vs) => vs.into_iter().map(SymValue).collect(),
-        SymContainerImpl::U8(vs) => vs.into_iter().map(SymValue::from_sym_u8).collect(),
-        SymContainerImpl::U64(vs) => vs.into_iter().map(SymValue::from_sym_u64).collect(),
-        SymContainerImpl::U128(vs) => vs.into_iter().map(SymValue::from_sym_u128).collect(),
-        SymContainerImpl::Bool(vs) => vs.into_iter().map(SymValue::from_sym_bool).collect(),
-      }),
-      v => Err(
-        VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR)
-          .with_message(format!("cannot cast {:?} to vector of values", v,)),
-      ),
-    }
-  }
-}
+// impl<'ctx> VMSymValueCast<Vec<SymValue<'ctx>>> for SymValue<'ctx> {
+//   fn cast(self) -> VMResult<Vec<SymValue<'ctx>>> {
+//     match self.0 {
+//       SymValueImpl::Container(r) => Ok(match take_unique_ownership(r)?.container {
+//         SymContainer::General(vs) => vs.into_iter().map(SymValue).collect(),
+//         SymContainer::U8(vs) => vs.into_iter().map(SymValue::from_sym_u8).collect(),
+//         SymContainer::U64(vs) => vs.into_iter().map(SymValue::from_sym_u64).collect(),
+//         SymContainer::U128(vs) => vs.into_iter().map(SymValue::from_sym_u128).collect(),
+//         SymContainer::Bool(vs) => vs.into_iter().map(SymValue::from_sym_bool).collect(),
+//       }),
+//       v => Err(
+//         VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR)
+//           .with_message(format!("cannot cast {:?} to vector of values", v,)),
+//       ),
+//     }
+//   }
+// }
 
 impl<'ctx> VMSymValueCast<SymStruct<'ctx>> for SymValue<'ctx> {
   fn cast(self) -> VMResult<SymStruct<'ctx>> {
@@ -1248,23 +1132,23 @@ impl<'ctx> VMSymValueCast<SymStructRef<'ctx>> for SymValue<'ctx> {
   }
 }
 
-impl<'ctx> VMSymValueCast<Vec<SymU8<'ctx>>> for SymValue<'ctx> {
-  fn cast(self) -> VMResult<Vec<SymU8<'ctx>>> {
-    match self.0 {
-      SymValueImpl::Container(r) => match take_unique_ownership(r)?.container {
-        SymContainerImpl::U8(v) => Ok(v),
-        v => Err(
-          VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR)
-            .with_message(format!("cannot cast {:?} to vector<SymU8>", v,)),
-        ),
-      },
-      v => Err(
-        VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR)
-          .with_message(format!("cannot cast {:?} to vector<SymU8>", v,)),
-      ),
-    }
-  }
-}
+// impl<'ctx> VMSymValueCast<Vec<SymU8<'ctx>>> for SymValue<'ctx> {
+//   fn cast(self) -> VMResult<Vec<SymU8<'ctx>>> {
+//     match self.0 {
+//       SymValueImpl::Container(r) => match take_unique_ownership(r)?.container {
+//         SymContainer::U8(v) => Ok(v),
+//         v => Err(
+//           VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR)
+//             .with_message(format!("cannot cast {:?} to vector<SymU8>", v,)),
+//         ),
+//       },
+//       v => Err(
+//         VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR)
+//           .with_message(format!("cannot cast {:?} to vector<SymU8>", v,)),
+//       ),
+//     }
+//   }
+// }
 
 impl<'ctx> SymValue<'ctx> {
   pub fn value_as<T>(self) -> VMResult<T>
@@ -1611,315 +1495,6 @@ impl<'ctx> SymIntegerValue<'ctx> {
 
 /***************************************************************************************
 *
-* Vector
-*
-*   Native function imeplementations of the Vector module.
-*
-*   TODO: split the code into two parts:
-*         1) Internal vector APIs that define & implements the core operations
-           (and operations only).
-*         2) Native function adapters that the dispatcher can call into. These will
-*            check if arguments are valid and deal with gas metering.
-*
-**************************************************************************************/
-
-pub mod vector {
-  use super::*;
-  use move_vm_types::loaded_data::runtime_types::Type;
-  use crate::types::natives::SymNativeContext;
-
-  pub const INDEX_OUT_OF_BOUNDS: u64 = NFE_VECTOR_ERROR_BASE + 1;
-  pub const POP_EMPTY_VEC: u64 = NFE_VECTOR_ERROR_BASE + 2;
-  pub const DESTROY_NON_EMPTY_VEC: u64 = NFE_VECTOR_ERROR_BASE + 3;
-
-  macro_rules! pop_arg_front {
-    ($arguments:ident, $t:ty) => {
-      $arguments.pop_front().unwrap().value_as::<$t>()?
-    };
-  }
-
-  fn check_elem_layout<'ctx>(ty: &Type, v: &SymContainer<'ctx>) -> VMResult<()> {
-    match (ty, &v.container) {
-      (Type::U8, SymContainerImpl::U8(_))
-      | (Type::U64, SymContainerImpl::U64(_))
-      | (Type::U128, SymContainerImpl::U128(_))
-      | (Type::Bool, SymContainerImpl::Bool(_))
-      | (Type::Address, SymContainerImpl::General(_))
-      | (Type::Signer, SymContainerImpl::General(_))
-      | (Type::Vector(_), SymContainerImpl::General(_))
-      | (Type::Struct(_), SymContainerImpl::General(_)) => Ok(()),
-      (Type::StructInstantiation(_, _), SymContainerImpl::General(_)) => Ok(()),
-
-      (Type::Reference(_), _) | (Type::MutableReference(_), _) | (Type::TyParam(_), _) => Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-          .with_message(format!("invalid type param for vector: {:?}", ty)),
-      ),
-
-      (Type::U8, _)
-      | (Type::U64, _)
-      | (Type::U128, _)
-      | (Type::Bool, _)
-      | (Type::Address, _)
-      | (Type::Signer, _)
-      | (Type::Vector(_), _)
-      | (Type::Struct(_), _)
-      | (Type::StructInstantiation(_, _), _) => Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(format!(
-          "vector elem layout mismatch, expected {:?}, got {:?}",
-          ty, v
-        )),
-      ),
-    }
-  }
-
-  pub fn native_empty<'ctx>(
-    context: &impl SymNativeContext<'ctx>,
-    ty_args: Vec<Type>,
-    args: VecDeque<SymValue<'ctx>>,
-  ) -> VMResult<SymNativeResult<'ctx>> {
-    debug_assert!(ty_args.len() == 1);
-    debug_assert!(args.is_empty());
-
-    let z3_ctx = context.get_z3_ctx();
-
-    // let cost = native_gas(context.cost_table(), NativeCostIndex::EMPTY, 1);
-
-    let container = match &ty_args[0] {
-      Type::U8 => SymContainer::u8(z3_ctx, vec![]),
-      Type::U64 => SymContainer::u64(z3_ctx, vec![]),
-      Type::U128 => SymContainer::u128(z3_ctx, vec![]),
-      Type::Bool => SymContainer::bool(z3_ctx, vec![]),
-
-      Type::Address
-      | Type::Signer
-      | Type::Vector(_)
-      | Type::Struct(_)
-      | Type::StructInstantiation(_, _) => SymContainer::general(z3_ctx, vec![]),
-
-      Type::Reference(_) | Type::MutableReference(_) | Type::TyParam(_) => {
-        return Err(
-          VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-            .with_message(format!("invalid type param for vector: {:?}", &ty_args[0])),
-        )
-      }
-    };
-
-    Ok(SymNativeResult::ok(
-      // cost,
-      vec![SymValue(SymValueImpl::new_container(container))],
-    ))
-  }
-
-  pub fn native_length<'ctx>(
-    context: &impl SymNativeContext<'ctx>,
-    ty_args: Vec<Type>,
-    mut args: VecDeque<SymValue<'ctx>>,
-  ) -> VMResult<SymNativeResult<'ctx>> {
-    debug_assert!(ty_args.len() == 1);
-    debug_assert!(args.len() == 1);
-
-    let z3_ctx = context.get_z3_ctx();
-
-    let r = pop_arg_front!(args, SymContainerRef);
-
-    // let cost = native_gas(context.cost_table(), NativeCostIndex::LENGTH, 1);
-
-    let v = r.borrow();
-    check_elem_layout(&ty_args[0], &*v)?;
-    let len = match &(*v).container {
-      SymContainerImpl::U8(v) => v.len(),
-      SymContainerImpl::U64(v) => v.len(),
-      SymContainerImpl::U128(v) => v.len(),
-      SymContainerImpl::Bool(v) => v.len(),
-      SymContainerImpl::General(v) => v.len(),
-    };
-
-    Ok(SymNativeResult::ok(/* cost, */vec![SymValue::from_u64(z3_ctx, len as u64)]))
-  }
-
-  pub fn native_push_back<'ctx>(
-    _context: &impl SymNativeContext<'ctx>,
-    ty_args: Vec<Type>,
-    mut args: VecDeque<SymValue<'ctx>>,
-  ) -> VMResult<SymNativeResult<'ctx>> {
-    debug_assert!(ty_args.len() == 1);
-    debug_assert!(args.len() == 2);
-
-    let r = pop_arg_front!(args, SymContainerRef);
-    let e = args.pop_front().unwrap();
-
-    // let cost = native_gas(
-    //   context.cost_table(),
-    //   NativeCostIndex::PUSH_BACK,
-    //   e.size().get() as usize,
-    // );
-
-    let mut v = r.borrow_mut();
-    check_elem_layout(&ty_args[0], &*v)?;
-    match &mut (*v).container {
-      SymContainerImpl::U8(v) => v.push(e.value_as()?),
-      SymContainerImpl::U64(v) => v.push(e.value_as()?),
-      SymContainerImpl::U128(v) => v.push(e.value_as()?),
-      SymContainerImpl::Bool(v) => v.push(e.value_as()?),
-      SymContainerImpl::General(v) => v.push(e.0),
-    }
-
-    Ok(SymNativeResult::ok(/* cost, */vec![]))
-  }
-
-  // !!! symbolic index?
-  // pub fn native_borrow<'ctx>(
-  //   context: &impl SymNativeContext<'ctx>,
-  //   ty_args: Vec<Type>,
-  //   mut args: VecDeque<SymValue<'ctx>>,
-  // ) -> VMResult<SymNativeResult<'ctx>> {
-  //   debug_assert!(ty_args.len() == 1);
-  //   debug_assert!(args.len() == 2);
-
-  //   let r = pop_arg_front!(args, SymContainerRef);
-  //   let idx = pop_arg_front!(args, u64) as usize;
-
-  //   let cost = native_gas(context.cost_table(), NativeCostIndex::BORROW, 1);
-
-  //   let v = r.borrow();
-  //   check_elem_layout(&ty_args[0], &*v)?;
-  //   if idx >= v.len() {
-  //     return Ok(SymNativeResult::err(
-  //       cost,
-  //       VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
-  //     ));
-  //   }
-  //   let v = SymValue(r.borrow_elem(idx)?);
-
-  //   Ok(SymNativeResult::ok(cost, vec![v]))
-  // }
-
-  pub fn native_pop<'ctx>(
-    _context: &impl SymNativeContext<'ctx>,
-    ty_args: Vec<Type>,
-    mut args: VecDeque<SymValue<'ctx>>,
-  ) -> VMResult<SymNativeResult<'ctx>> {
-    debug_assert!(ty_args.len() == 1);
-    debug_assert!(args.len() == 1);
-
-    let r = pop_arg_front!(args, SymContainerRef);
-
-    // let cost = native_gas(context.cost_table(), NativeCostIndex::POP_BACK, 1);
-
-    let mut v = r.borrow_mut();
-    check_elem_layout(&ty_args[0], &*v)?;
-
-    macro_rules! err_pop_empty_vec {
-      () => {
-        return Ok(SymNativeResult::err(
-          // cost,
-          VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(POP_EMPTY_VEC),
-        ));
-      };
-    }
-
-    let res = match &mut (*v).container {
-      SymContainerImpl::U8(v) => match v.pop() {
-        Some(x) => SymValue::from_sym_u8(x),
-        None => err_pop_empty_vec!(),
-      },
-      SymContainerImpl::U64(v) => match v.pop() {
-        Some(x) => SymValue::from_sym_u64(x),
-        None => err_pop_empty_vec!(),
-      },
-      SymContainerImpl::U128(v) => match v.pop() {
-        Some(x) => SymValue::from_sym_u128(x),
-        None => err_pop_empty_vec!(),
-      },
-      SymContainerImpl::Bool(v) => match v.pop() {
-        Some(x) => SymValue::from_sym_bool(x),
-        None => err_pop_empty_vec!(),
-      },
-
-      SymContainerImpl::General(v) => match v.pop() {
-        Some(x) => SymValue(x),
-        None => err_pop_empty_vec!(),
-      },
-    };
-
-    Ok(SymNativeResult::ok(/* cost, */vec![res]))
-  }
-
-  pub fn native_destroy_empty<'ctx>(
-    _context: &impl SymNativeContext<'ctx>,
-    ty_args: Vec<Type>,
-    mut args: VecDeque<SymValue<'ctx>>,
-  ) -> VMResult<SymNativeResult<'ctx>> {
-    debug_assert!(ty_args.len() == 1);
-    debug_assert!(args.len() == 1);
-    let v = args.pop_front().unwrap().value_as::<SymContainer>()?;
-
-    // let cost = native_gas(context.cost_table(), NativeCostIndex::DESTROY_EMPTY, 1);
-
-    check_elem_layout(&ty_args[0], &v)?;
-
-    let is_empty = match &v.container {
-      SymContainerImpl::U8(v) => v.is_empty(),
-      SymContainerImpl::U64(v) => v.is_empty(),
-      SymContainerImpl::U128(v) => v.is_empty(),
-      SymContainerImpl::Bool(v) => v.is_empty(),
-
-      SymContainerImpl::General(v) => v.is_empty(),
-    };
-
-    if is_empty {
-      Ok(SymNativeResult::ok(/* cost, */vec![]))
-    } else {
-      Ok(SymNativeResult::err(
-        // cost,
-        VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(DESTROY_NON_EMPTY_VEC),
-      ))
-    }
-  }
-
-  // !!! symbolic index?
-  // pub fn native_swap<'ctx>(
-  //   context: &impl SymNativeContext<'ctx>,
-  //   ty_args: Vec<Type>,
-  //   mut args: VecDeque<SymValue<'ctx>>,
-  // ) -> VMResult<SymNativeResult<'ctx>> {
-  //   debug_assert!(ty_args.len() == 1);
-  //   debug_assert!(args.len() == 3);
-  //   let r = pop_arg_front!(args, SymContainerRef);
-  //   let idx1 = pop_arg_front!(args, u64) as usize;
-  //   let idx2 = pop_arg_front!(args, u64) as usize;
-
-  //   let cost = native_gas(context.cost_table(), NativeCostIndex::SWAP, 1);
-
-  //   let mut v = r.borrow_mut();
-  //   check_elem_layout(&ty_args[0], &*v)?;
-
-  //   macro_rules! swap {
-  //     ($v: ident) => {{
-  //       if idx1 >= $v.len() || idx2 >= $v.len() {
-  //         return Ok(SymNativeResult::err(
-  //           cost,
-  //           VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
-  //         ));
-  //       }
-  //       $v.swap(idx1, idx2);
-  //     }};
-  //   }
-
-  //   match &mut (*v).container {
-  //     SymContainerImpl::U8(v) => swap!(v),
-  //     SymContainerImpl::U64(v) => swap!(v),
-  //     SymContainerImpl::U128(v) => swap!(v),
-  //     SymContainerImpl::Bool(v) => swap!(v),
-  //     SymContainerImpl::General(v) => swap!(v),
-  //   }
-
-  //   Ok(SymNativeResult::ok(cost, vec![]))
-  // }
-}
-
-/***************************************************************************************
-*
 * Gas
 *
 *   Abstract memory sizes of the VM values.
@@ -1928,16 +1503,20 @@ pub mod vector {
 
 impl<'ctx> SymContainer<'ctx> {
   fn size(&self) -> AbstractMemorySize<GasCarrier> {
-    use SymContainerImpl::*;
+    use SymContainer::*;
 
-    match &self.container {
-      General(v) => v
+    match &self {
+      Locals { locals: v, .. } => v
         .iter()
         .fold(STRUCT_SIZE, |acc, v| acc.map2(v.size(), Add::add)),
-      U8(v) => AbstractMemorySize::new((v.len() * size_of::<u8>()) as u64),
-      U64(v) => AbstractMemorySize::new((v.len() * size_of::<u64>()) as u64),
-      U128(v) => AbstractMemorySize::new((v.len() * size_of::<u128>()) as u64),
-      Bool(v) => AbstractMemorySize::new((v.len() * size_of::<bool>()) as u64),
+      // !!! figure it out
+      // Struct(v) => AbstractMemorySize::new((v.len() * size_of::<u8>()) as u64),
+      // Vector(v) => AbstractMemorySize::new((v.len() * size_of::<u8>()) as u64),
+      // VecU8(v) => AbstractMemorySize::new((v.len() * size_of::<u8>()) as u64),
+      // VecU64(v) => AbstractMemorySize::new((v.len() * size_of::<u64>()) as u64),
+      // VecU128(v) => AbstractMemorySize::new((v.len() * size_of::<u128>()) as u64),
+      // VecBool(v) => AbstractMemorySize::new((v.len() * size_of::<bool>()) as u64),
+      _ => AbstractMemorySize::new(0),
     }
   }
 }
@@ -2011,20 +1590,14 @@ impl<'ctx> SymGlobalValue<'ctx> {
 *
 **************************************************************************************/
 impl<'ctx> SymStruct<'ctx> {
-  pub fn pack<I: IntoIterator<Item = SymValue<'ctx>>>(context: &'ctx Context, vals: I) -> Self {
-    Self(SymContainer {
-      context,
-      container: SymContainerImpl::General(vals.into_iter().map(|v| v.0).collect()),
-    })
+  pub fn pack<I: IntoIterator<Item = SymValue<'ctx>>>(context: &'ctx Context, ty: &FatStructType, vals: I) -> VMResult<Self> {
+    Ok(Self(SymContainer::Struct(SymStructImpl::pack(context, ty, vals)?)))
   }
 
   pub fn unpack(self) -> VMResult<impl Iterator<Item = SymValue<'ctx>>> {
-    match self.0.container {
-      SymContainerImpl::General(v) => Ok(v.into_iter().map(SymValue)),
-      SymContainerImpl::U8(_)
-      | SymContainerImpl::U64(_)
-      | SymContainerImpl::U128(_)
-      | SymContainerImpl::Bool(_) => Err(
+    match self.0 {
+      SymContainer::Struct(v) => Ok(v.unpack()?.into_iter()),
+      _ => Err(
         VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
           .with_message("not a struct".to_string()),
       ),
@@ -2116,8 +1689,8 @@ impl<'ctx> Display for SymValueImpl<'ctx> {
       Self::U64(x) => write!(f, "SymU64({})", x),
       Self::U128(x) => write!(f, "SymU128({})", x),
       Self::Bool(x) => write!(f, "SymBool({})", x),
-      Self::Address(addr) => write!(f, "SymAddress({})", addr.short_str()),
-      Self::Signer(addr) => write!(f, "SymSigner({})", addr.short_str()),
+      Self::Address(addr) => write!(f, "SymAddress({:?})", addr),
+      Self::Signer(addr) => write!(f, "SymSigner({:?})", addr),
 
       Self::Container(r) => write!(f, "SymContainer({})", &*r.borrow()),
 
@@ -2167,13 +1740,15 @@ impl<'ctx> Display for SymIndexedRef<'ctx> {
 
 impl<'ctx> Display for SymContainer<'ctx> {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    use SymContainerImpl::*;
-    match &self.container {
-      General(v) => display_list_of_items(v, f),
-      U8(v) => display_list_of_items(v, f),
-      U64(v) => display_list_of_items(v, f),
-      U128(v) => display_list_of_items(v, f),
-      Bool(v) => display_list_of_items(v, f),
+    use SymContainer::*;
+    match &self {
+      Locals { locals: v, .. } => display_list_of_items(v, f),
+      Struct(v) => write!(f, "{:?}", v),
+      Vector(v) => write!(f, "{:?}", v),
+      VecU8(v) => write!(f, "{:?}", v),
+      VecU64(v) => write!(f, "{:?}", v),
+      VecU128(v) => write!(f, "{:?}", v),
+      VecBool(v) => write!(f, "{:?}", v),
     }
   }
 }
@@ -2181,24 +1756,6 @@ impl<'ctx> Display for SymContainer<'ctx> {
 impl<'ctx> Display for SymValue<'ctx> {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     Display::fmt(&self.0, f)
-  }
-}
-
-impl<'ctx> Display for SymLocals<'ctx> {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    // TODO: this could panic.
-    match &(*self.0.borrow()).container {
-      SymContainerImpl::General(v) => write!(
-        f,
-        "{}",
-        v.iter()
-          .enumerate()
-          .map(|(idx, val)| format!("[{}] {}", idx, val))
-          .collect::<Vec<_>>()
-          .join("\n")
-      ),
-      _ => unreachable!(),
-    }
   }
 }
 
@@ -2498,4 +2055,53 @@ impl<'ctx> SymValue<'ctx> {
   //   let data = value.simple_serialize(&ty)?;
   //   Some(Constant { data, type_ })
   // }
+}
+
+/***************************************************************************************
+*
+* SymbolicMoveValue
+*
+**************************************************************************************/
+
+impl<'ctx> SymbolicMoveValue<'ctx> for SymContainer<'ctx> {
+  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+    use SymContainer::*;
+
+    match &self {
+      Locals { .. } => Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!("{:?} can not be made into ast!", self))),
+      Struct(s) => Ok(s.as_ast()?),
+      Vector(v) | VecU8(v) | VecU64(v) | VecU128(v) | VecBool(v) => {
+        Ok(v.as_ast()?)
+      }
+    }
+  }
+}
+
+impl<'ctx> SymbolicMoveValue<'ctx> for SymValueImpl<'ctx> {
+  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+    use SymValueImpl::*;
+  
+    match self {
+      Invalid => Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!("{:?} can not be made into ast!", self))),
+    
+      U8(v) => Ok(v.as_ast()?),
+      U64(v) => Ok(v.as_ast()?),
+      U128(v) => Ok(v.as_ast()?),
+      Bool(v) => Ok(v.as_ast()?),
+      Address(v) => Ok(v.as_ast()?),
+      Signer(v) => Ok(v.as_ast()?),
+    
+      Container(c) => Ok(c.borrow().as_ast()?),
+    
+      ContainerRef(_) => Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!("{:?} can not be made into ast!", self))),
+      IndexedRef(_) => Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!("{:?} can not be made into ast!", self))),
+    }
+  }
+}
+
+
+impl<'ctx> SymbolicMoveValue<'ctx> for SymValue<'ctx> {
+  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+    Ok(self.0.as_ast()?)
+  }
 }

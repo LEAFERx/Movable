@@ -2,11 +2,14 @@ use vm::{
   errors::*,
 };
 
-use z3::ast::{Ast, Bool, Dynamic, BV};
+use z3::{
+  ast::{Ast, Bool, Dynamic, BV},
+  Context,
+};
 
 use std::fmt;
 
-use z3::Context;
+use super::SymbolicMoveValue;
 
 #[derive(Debug, Clone)]
 pub struct SymU8<'ctx>(BV<'ctx>);
@@ -44,11 +47,6 @@ impl<'ctx> SymU8<'ctx> {
 
   pub fn as_inner(&self) -> &BV<'ctx> {
     &self.0
-  }
-
-  // Should drop self after collected?
-  pub fn collect(self) -> Dynamic<'ctx> {
-    Dynamic::from_ast(&self.0)
   }
 
   pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
@@ -137,10 +135,6 @@ impl<'ctx> SymU64<'ctx> {
 
   pub fn as_inner(&self) -> &BV<'ctx> {
     &self.0
-  }
-
-  pub fn collect(self) -> Dynamic<'ctx> {
-    Dynamic::from_ast(&self.0)
   }
 
   pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
@@ -234,10 +228,6 @@ impl<'ctx> SymU128<'ctx> {
     &self.0
   }
 
-  pub fn collect(self) -> Dynamic<'ctx> {
-    Dynamic::from_ast(&self.0)
-  }
-
   pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
     Ok(SymBool(self.0._eq(&other.0)))
   }
@@ -316,10 +306,6 @@ impl<'ctx> SymBool<'ctx> {
     &self.0
   }
 
-  pub fn collect(self) -> Dynamic<'ctx> {
-    Dynamic::from_ast(&self.0)
-  }
-
   pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
     Ok(SymBool(self.0._eq(&other.0)))
   }
@@ -334,6 +320,30 @@ impl<'ctx> SymBool<'ctx> {
 
   pub fn or(&self, other: &Self) -> SymBool<'ctx> {
     SymBool(Bool::or(self.0.get_ctx(), &[&self.0, &other.0]))
+  }
+}
+
+impl<'ctx> SymbolicMoveValue<'ctx> for SymU8<'ctx> {
+  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+    Ok(Dynamic::from_ast(&self.0))
+  }
+}
+
+impl<'ctx> SymbolicMoveValue<'ctx> for SymU64<'ctx> {
+  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+    Ok(Dynamic::from_ast(&self.0))
+  }
+}
+
+impl<'ctx> SymbolicMoveValue<'ctx> for SymU128<'ctx> {
+  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+    Ok(Dynamic::from_ast(&self.0))
+  }
+}
+
+impl<'ctx> SymbolicMoveValue<'ctx> for SymBool<'ctx> {
+  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+    Ok(Dynamic::from_ast(&self.0))
   }
 }
 

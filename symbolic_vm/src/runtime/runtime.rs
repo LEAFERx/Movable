@@ -29,7 +29,7 @@ use std::{
 use z3::{Context, ast::{Ast, BV, Bool}};
 use crate::{
   plugin::{PluginManager, IntegerArithmeticPlugin, VerificationPlugin, Specification},
-  types::values::{SymValue, SymBool, SymU64, VMSymValueCast},
+  types::values::{SymValue, SymBool, SymU64, VMSymValueCast, SymbolicMoveValue},
   runtime::loader::Function,
 };
 
@@ -194,7 +194,7 @@ impl<'ctx> VMRuntime<'ctx> {
       &args,
     )?;
 
-    let args: VMResult<Vec<_>> = args.into_iter().map(|v| v.into_ast()).collect();
+    let args: VMResult<Vec<_>> = args.into_iter().map(|v| v.as_ast()).collect();
     let args = args?;
 
     let mut interp_stack = vec![];
@@ -215,7 +215,7 @@ impl<'ctx> VMRuntime<'ctx> {
             }
             println!("Returns:");
             for (idx, val) in return_values.into_iter().enumerate() {
-              println!("Index {}: {:#?}", idx, model.eval(&val.into_ast()?));
+              println!("Index {}: {:#?}", idx, model.eval(&val.as_ast()?));
             }
             println!("---------------------");
           }

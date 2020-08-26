@@ -35,6 +35,7 @@ use crate::{
     values::{
       SymU8, SymU64, /* SymU128, */ SymBool, SymAccountAddress, /* SymGlobalValue, */
       SymIntegerValue, SymLocals, SymReference, SymStruct, SymStructRef, SymValue, VMSymValueCast,
+      SymbolicMoveValue,
     },
   },
 };
@@ -446,7 +447,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     let model = solver.get_model();
     msg += "Test Function Arguments\n";
     for (i, v) in args.into_iter().enumerate() {
-      msg += &format!("  {}: {:#?}\n", i, model.eval(&v.into_ast()?));
+      msg += &format!("  {}: {:#?}\n", i, model.eval(&v.as_ast()?));
     }
     msg += "Test Function Returns\n";
     for i in 0..current_frame.function.return_count() {
@@ -1116,9 +1117,17 @@ impl<'ctx> SymFrame<'ctx> {
             //   |acc, v| acc.add(v.size()),
             // );
             // gas!(instr: context, interpreter, Opcodes::PACK, size)?;
+            let struct_type = resolver.struct_at(*sd_idx);
+            // TODO: Check this function! It should be fine when dealing with non-resource struct
+            let libra_type = resolver.get_libra_type_info(
+              &struct_type.module,
+              struct_type.name.as_ident_str(),
+              &[],
+              vm_ctx,
+            )?;
             interpreter
               .operand_stack
-              .push(SymValue::from_sym_struct(SymStruct::pack(interpreter.solver.get_context(), args)))?;
+              .push(SymValue::from_sym_struct(SymStruct::pack(interpreter.solver.get_context(), libra_type.fat_type(), args)?))?;
           }
           Bytecode::PackGeneric(si_idx) => {
             let field_count = resolver.field_instantiation_count(*si_idx);
@@ -1128,9 +1137,21 @@ impl<'ctx> SymFrame<'ctx> {
             //   |acc, v| acc.add(v.size()),
             // );
             // gas!(instr: context, interpreter, Opcodes::PACK, size)?;
+            let struct_inst = resolver.struct_instantiation_at(*si_idx);
+            let mut instantiation = vec![];
+            for inst in struct_inst.get_instantiation() {
+              instantiation.push(inst.subst(self.ty_args())?);
+            }
+            let struct_type = resolver.struct_type_at(struct_inst.get_def_idx());
+            let libra_type = resolver.get_libra_type_info(
+              &struct_type.module,
+              struct_type.name.as_ident_str(),
+              &instantiation,
+              vm_ctx,
+            )?;
             interpreter
               .operand_stack
-              .push(SymValue::from_sym_struct(SymStruct::pack(interpreter.solver.get_context(), args)))?;
+              .push(SymValue::from_sym_struct(SymStruct::pack(interpreter.solver.get_context(), libra_type.fat_type(), args)?))?;
           }
           Bytecode::Unpack(_sd_idx) => {
             // let field_count = resolver.field_count(*sd_idx);
@@ -1340,7 +1361,7 @@ impl<'ctx> SymFrame<'ctx> {
               .push(SymValue::from_address(interpreter.solver.get_context(), interpreter.txn_data.sender()))?;
           }
           Bytecode::MutBorrowGlobal(sd_idx) | Bytecode::ImmBorrowGlobal(sd_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
             let _size = interpreter.global_data_op(
               resolver,
               vm_ctx,
@@ -1357,7 +1378,7 @@ impl<'ctx> SymFrame<'ctx> {
             // )?;
           }
           Bytecode::MutBorrowGlobalGeneric(si_idx) | Bytecode::ImmBorrowGlobalGeneric(si_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
             let _size = interpreter.global_data_op_generic(
               resolver,
               vm_ctx,
@@ -1375,13 +1396,13 @@ impl<'ctx> SymFrame<'ctx> {
             // )?;
           }
           Bytecode::Exists(sd_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
             let _size =
               interpreter.global_data_op(resolver, vm_ctx, addr, *sd_idx, None, SymInterpreter::exists)?;
             // gas!(instr: context, interpreter, Opcodes::EXISTS, size)?;
           }
           Bytecode::ExistsGeneric(si_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
             let _size = interpreter.global_data_op_generic(
               resolver,
               vm_ctx,
@@ -1394,7 +1415,7 @@ impl<'ctx> SymFrame<'ctx> {
             // gas!(instr: context, interpreter, Opcodes::EXISTS_GENERIC, size)?;
           }
           Bytecode::MoveFrom(sd_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
             let _size = interpreter.global_data_op(
               resolver,
               vm_ctx,
@@ -1408,7 +1429,7 @@ impl<'ctx> SymFrame<'ctx> {
             // gas!(instr: context, interpreter, Opcodes::MOVE_FROM, size)?;
           }
           Bytecode::MoveFromGeneric(si_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address();
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
             let _size = interpreter.global_data_op_generic(
               resolver,
               vm_ctx,
@@ -1460,7 +1481,7 @@ impl<'ctx> SymFrame<'ctx> {
           Bytecode::MoveTo(sd_idx) => {
             let resource = interpreter.operand_stack.pop_as::<SymStruct>()?;
             let signer_reference = interpreter.operand_stack.pop_as::<SymReference>()?;
-            let addr = signer_reference.read_ref()?.value_as::<SymAccountAddress>()?.into_address();
+            let addr = signer_reference.read_ref()?.value_as::<SymAccountAddress>()?.into_address()?;
             let _size = interpreter.global_data_op(
               resolver,
               vm_ctx,
@@ -1474,7 +1495,7 @@ impl<'ctx> SymFrame<'ctx> {
           Bytecode::MoveToGeneric(si_idx) => {
             let resource = interpreter.operand_stack.pop_as::<SymStruct>()?;
             let signer_reference = interpreter.operand_stack.pop_as::<SymReference>()?;
-            let addr = signer_reference.read_ref()?.value_as::<SymAccountAddress>()?.into_address();
+            let addr = signer_reference.read_ref()?.value_as::<SymAccountAddress>()?.into_address()?;
             let _size = interpreter.global_data_op_generic(
               resolver,
               vm_ctx,
