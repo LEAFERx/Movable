@@ -96,11 +96,11 @@ impl NativeFunction {
       // }
       Self::VectorLength => vector::native_length(ctx, t, v),
       Self::VectorEmpty => vector::native_empty(ctx, t, v),
-      // Self::VectorBorrow => vector::native_borrow(ctx, t, v),
-      // Self::VectorBorrowMut => vector::native_borrow(ctx, t, v),
+      Self::VectorBorrow => vector::native_borrow(ctx, t, v),
+      Self::VectorBorrowMut => vector::native_borrow(ctx, t, v),
       Self::VectorPushBack => vector::native_push_back(ctx, t, v),
       Self::VectorPopBack => vector::native_pop(ctx, t, v),
-      // Self::VectorDestroyEmpty => vector::native_destroy_empty(ctx, t, v),
+      Self::VectorDestroyEmpty => vector::native_destroy_empty(ctx, t, v),
       Self::VectorSwap => vector::native_swap(ctx, t, v),
       // natives that need the full API of `NativeContext`
       // Self::AccountWriteEvent => event::native_emit_event(ctx, t, v),

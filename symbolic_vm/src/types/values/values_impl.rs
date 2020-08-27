@@ -121,10 +121,20 @@ pub(super) enum GlobalDataStatus {
   Dirty,
 }
 
+// Symbolic is used on vector, while Concrete is used on locals and struct
+// According to Move design, we won't use Concrete on vector, but currently
+// Movable supports it.
+// TODO: evaluate this.
+#[derive(Debug)]
+pub(super) enum SymbolicContainerIndex<'ctx> {
+  Concrete(usize),
+  Symbolic(SymU64<'ctx>),
+}
+
 /// A Move reference pointing to an element in a container.
 #[derive(Debug)]
 pub(super) struct SymIndexedRef<'ctx> {
-  pub(super) idx: usize,
+  pub(super) idx: SymbolicContainerIndex<'ctx>,
   pub(super) container_ref: SymContainerRef<'ctx>,
 }
 
@@ -242,6 +252,41 @@ impl<'ctx> SymValue<'ctx> {
       _ => false,
     }
   }
+}
+
+impl<'ctx> SymbolicContainerIndex<'ctx> {
+  pub(super) fn to_concrete(&self) -> Option<usize> {
+    use SymbolicContainerIndex::*;
+
+    match self {
+      Concrete(idx) => Some(*idx),
+      Symbolic(_) => None,
+    }
+  }
+}
+
+macro_rules! get_local_by_idx {
+  ($locals: ident, $idx: expr) => {
+    {
+      let idx = $idx.to_concrete().ok_or(
+        VMStatus::new(StatusCode::INVALID_DATA)
+          .with_message(format!("Symbolic index {:?} cannot be used on Locals", $idx))
+      )?;
+      &$locals[idx]
+    }
+  };
+}
+
+macro_rules! set_local_by_idx {
+  ($locals: ident, $idx: expr, $val: expr) => {
+    {
+      let idx = $idx.to_concrete().ok_or(
+        VMStatus::new(StatusCode::INVALID_DATA)
+          .with_message(format!("Symbolic index {:?} cannot be used on Locals", $idx))
+      )?;
+      $locals[idx] = $val;
+    }
+  };
 }
 
 /***************************************************************************************
@@ -380,10 +425,21 @@ impl<'ctx> SymContainer<'ctx> {
   }
 }
 
+impl<'ctx> SymbolicContainerIndex<'ctx> {
+  fn copy_value(&self) -> Self {
+    use SymbolicContainerIndex::*;
+  
+    match self {
+      Concrete(idx) => Concrete(*idx),
+      Symbolic(idx) => Symbolic(idx.clone()),
+    }
+  }
+}
+
 impl<'ctx> SymIndexedRef<'ctx> {
   fn copy_value(&self) -> Self {
     Self {
-      idx: self.idx,
+      idx: self.idx.copy_value(),
       container_ref: self.container_ref.copy_value(),
     }
   }
@@ -505,25 +561,31 @@ impl<'ctx> SymIndexedRef<'ctx> {
     macro_rules! eq {
       ($v1: expr) => {
         match &*other.container_ref.borrow() {
-          Locals { locals: v2, ..} => $v1.equals(&v2[other.idx]),
-          Struct(v2) => $v1.equals(&v2.get(self.idx)?.0),
+          Locals { locals: v2, ..} => $v1.equals(get_local_by_idx!(v2, other.idx)),
+          Struct(v2) => $v1.equals(&v2.get(&other.idx)?.0),
           Vector(v2)
           | VecU8(v2)
           | VecU64(v2)
           | VecU128(v2)
-          | VecBool(v2) => $v1.equals(&v2.get_concrete(self.idx)?.0),
+          | VecBool(v2) => $v1.equals(&v2.get(&other.idx)?.0),
         }
       };
     }
 
     match &*self.container_ref.borrow() {
-      Locals { locals: v1, ..} => eq!(v1[self.idx]),
-      Struct(v) => eq!(v.get(self.idx)?.0),
+      Locals { locals: v1, ..} => {
+        let idx = self.idx.to_concrete().ok_or(
+          VMStatus::new(StatusCode::INVALID_DATA)
+            .with_message(format!("Symbolic index {:?} cannot be used on Locals", self.idx))
+        )?;
+        eq!(v1[idx])
+      },
+      Struct(v) => eq!(v.get(&other.idx)?.0),
       Vector(v)
       | VecU8(v)
       | VecU64(v)
       | VecU128(v)
-      | VecBool(v) => eq!(v.get_concrete(self.idx)?.0),
+      | VecBool(v) => eq!(v.get(&self.idx)?.0),
     }
   }
 }
@@ -555,13 +617,13 @@ impl<'ctx> SymIndexedRef<'ctx> {
     use SymContainer::*;
 
     let res = match &*self.container_ref.borrow() {
-      Locals { locals: v, ..} => SymValue(v[self.idx].copy_value()),
-      Struct(v) => v.get(self.idx)?,
+      Locals { locals: v, ..} => SymValue(get_local_by_idx!(v, self.idx).copy_value()),
+      Struct(v) => v.get(&self.idx)?,
       Vector(v)
       | VecU8(v)
       | VecU64(v)
       | VecU128(v)
-      | VecBool(v) => v.get_concrete(self.idx)?,
+      | VecBool(v) => v.get(&self.idx)?,
     };
 
     Ok(res)
@@ -635,15 +697,13 @@ impl<'ctx> SymIndexedRef<'ctx> {
     }
 
     match (&mut *self.container_ref.borrow_mut(), &x.0) {
-      (SymContainer::Locals { locals: v, .. }, _) => {
-        v[self.idx] = x.0;
-      }
-      (SymContainer::Struct(v), _) => v.set(self.idx, x)?,
+      (SymContainer::Locals { locals: v, .. }, _) => set_local_by_idx!(v, self.idx, x.0),
+      (SymContainer::Struct(v), _) => v.set(&self.idx, x)?,
       (SymContainer::Vector(v), _)
       | (SymContainer::VecU8(v), SymValueImpl::U8(_))
       | (SymContainer::VecU64(v), SymValueImpl::U64(_))
       | (SymContainer::VecU128(v), SymValueImpl::U128(_))
-      | (SymContainer::VecBool(v), SymValueImpl::Bool(_)) => v.set_concrete(self.idx, x)?,
+      | (SymContainer::VecBool(v), SymValueImpl::Bool(_)) => v.set(&self.idx, x)?,
       _ => {
         return Err(
           VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!(
@@ -682,22 +742,28 @@ impl<'ctx> SymReference<'ctx> {
 **************************************************************************************/
 
 impl<'ctx> SymContainerRef<'ctx> {
-  pub(super) fn borrow_elem(&self, idx: usize) -> VMResult<SymValueImpl<'ctx>> {
+  pub(super) fn borrow_elem(&self, idx: SymbolicContainerIndex<'ctx>) -> VMResult<SymValueImpl<'ctx>> {
+    use SymbolicContainerIndex::*;
+
     let r = self.borrow();
 
-    if idx >= r.len() {
-      return Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(format!(
-          "index out of bounds when borrowing container element: got: {}, len: {}",
-          idx,
-          r.len()
-        )),
-      );
+    match &idx {
+      Concrete(idx) => if *idx >= r.len() {
+        return Err(
+          VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(format!(
+            "index out of bounds when borrowing container element: got: {}, len: {}",
+            idx,
+            r.len()
+          )),
+        );
+      },
+      // Symbolic is only used on vector, check in vector::native_borrow
+      Symbolic(_) => {},
     }
 
     // TODO: Currently except locals all ref is in indexed ref, it seems ok to me but nee further consideration.
     let res = match &*r {
-      SymContainer::Locals { locals: v, .. } => match &v[idx] {
+      SymContainer::Locals { locals: v, .. } => match get_local_by_idx!(v, idx) {
         // TODO: check for the impossible combinations.
         SymValueImpl::Container(container) => {
           let r = match self {
@@ -726,7 +792,7 @@ impl<'ctx> SymContainerRef<'ctx> {
 
 impl<'ctx> SymStructRef<'ctx> {
   pub fn borrow_field(&self, idx: usize) -> VMResult<SymValue<'ctx>> {
-    Ok(SymValue(self.0.borrow_elem(idx)?))
+    Ok(SymValue(self.0.borrow_elem(SymbolicContainerIndex::Concrete(idx))?))
   }
 }
 
@@ -1734,7 +1800,7 @@ impl<'ctx> Display for SymContainerRef<'ctx> {
 
 impl<'ctx> Display for SymIndexedRef<'ctx> {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    write!(f, "{}<{}>", self.container_ref, self.idx)
+    write!(f, "{}<{:?}>", self.container_ref, self.idx)
   }
 }
 

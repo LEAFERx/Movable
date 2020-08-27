@@ -34,7 +34,7 @@ use z3::{
 use crate::types::{
   natives::{SymNativeResult, SymNativeContext},
   values::{
-    values_impl::{SymValue, SymValueImpl, SymContainerRef, SymContainer},
+    values_impl::{SymValue, SymValueImpl, SymContainerRef, SymContainer, SymbolicContainerIndex},
     primitives::SymU64,
     struct_impl::{fat_type_to_sort},
     SymbolicMoveValue,
@@ -172,27 +172,34 @@ impl<'ctx> SymVectorImpl<'ctx> {
     res
   }
 
-  // pub(super) fn get(&self, idx: &SymU64<'ctx>) -> VMResult<SymValue<'ctx>> {
-  //   let ast = self.get_raw(&idx.as_ast()?);
-  //   let ty = &self.element_type;
-  //   Ok(SymValue::from_ast_with_type_info(self.context, ast, ty)?)
-  // }
+  pub(super) fn get(&self, idx: &SymbolicContainerIndex<'ctx>) -> VMResult<SymValue<'ctx>> {
+    use SymbolicContainerIndex::*;
 
-  pub(super) fn get_concrete(&self, idx: usize) -> VMResult<SymValue<'ctx>> {
-    let idx = BV::from_u64(self.context, idx as u64, 64);
-    let ast = self.get_raw(&Dynamic::from_ast(&idx));
+    let ast = match idx {
+      Concrete(idx) => {
+        let idx = BV::from_u64(self.context, *idx as u64, 64);
+        self.get_raw(&Dynamic::from_ast(&idx))
+      },
+      Symbolic(idx) => self.get_raw(&idx.as_ast()?),
+    };
     let ty = &self.element_type;
     Ok(SymValue::from_ast_with_type_info(self.context, ast, ty)?)
   }
 
-  // pub(super) fn set(&mut self, idx: &SymU64<'ctx>, val: SymValue<'ctx>) -> VMResult<()> {
-  //   self.set_raw(&idx.as_ast()?, &val.as_ast()?);
-  //   Ok(())
-  // }
+  pub(super) fn set(
+    &mut self,
+    idx: &SymbolicContainerIndex<'ctx>,
+    val: SymValue<'ctx>
+  ) -> VMResult<()> {
+    use SymbolicContainerIndex::*;
 
-  pub(super) fn set_concrete(&mut self, idx: usize, val: SymValue<'ctx>) -> VMResult<()> {
-    let idx = BV::from_u64(self.context, idx as u64, 64);
-    self.set_raw(&Dynamic::from_ast(&idx), &val.as_ast()?);
+    match idx {
+      Concrete(idx) => {
+        let idx = BV::from_u64(self.context, *idx as u64, 64);
+        self.set_raw(&Dynamic::from_ast(&idx), &val.as_ast()?);
+      },
+      Symbolic(idx) => self.set_raw(&idx.as_ast()?, &val.as_ast()?),
+    };
     Ok(())
   }
 
@@ -374,32 +381,32 @@ pub fn native_push_back<'ctx>(
   Ok(SymNativeResult::ok(/* cost, */vec![]))
 }
 
-// TODO: borrow is not possible until SymIndexedRef supports symbolic index
-// pub fn native_borrow<'ctx>(
-//   context: &impl SymNativeContext<'ctx>,
-//   ty_args: Vec<Type>,
-//   mut args: VecDeque<SymValue<'ctx>>,
-// ) -> VMResult<SymNativeResult<'ctx>> {
-//   debug_assert!(ty_args.len() == 1);
-//   debug_assert!(args.len() == 2);
+pub fn native_borrow<'ctx>(
+  _context: &impl SymNativeContext<'ctx>,
+  ty_args: Vec<Type>,
+  mut args: VecDeque<SymValue<'ctx>>,
+) -> VMResult<SymNativeResult<'ctx>> {
+  debug_assert!(ty_args.len() == 1);
+  debug_assert!(args.len() == 2);
 
-//   let r = pop_arg_front!(args, SymContainerRef);
-//   let idx = pop_arg_front!(args, SymU64);
+  let r = pop_arg_front!(args, SymContainerRef);
+  let idx = pop_arg_front!(args, SymU64);
 
-//   // let cost = native_gas(context.cost_table(), NativeCostIndex::BORROW, 1);
+  // let cost = native_gas(context.cost_table(), NativeCostIndex::BORROW, 1);
 
-//   let v = r.borrow();
-//   check_elem_layout(&ty_args[0], &*v)?;
-//   if idx >= v.len() {
-//     return Ok(SymNativeResult::err(
-//       /* cost, */
-//       VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
-//     ));
-//   }
-//   let v = SymValue(r.borrow_elem(idx)?);
+  let v = r.borrow();
+  check_elem_layout(&ty_args[0], &*v)?;
+  // TODO: check index out of bound?
+  // if idx >= v.len() {
+  //   return Ok(SymNativeResult::err(
+  //     /* cost, */
+  //     VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
+  //   ));
+  // }
+  let v = SymValue(r.borrow_elem(SymbolicContainerIndex::Symbolic(idx))?);
 
-//   Ok(SymNativeResult::ok(cost, vec![v]))
-// }
+  Ok(SymNativeResult::ok(/* cost, */vec![v]))
+}
 
 pub fn native_pop<'ctx>(
   context: &impl SymNativeContext<'ctx>,
@@ -478,37 +485,38 @@ pub fn native_pop<'ctx>(
 }
 
 // TODO: how can we check if a vector is empty? or just destory it
-// pub fn native_destroy_empty<'ctx>(
-//   _context: &impl SymNativeContext<'ctx>,
-//   ty_args: Vec<Type>,
-//   mut args: VecDeque<SymValue<'ctx>>,
-// ) -> VMResult<SymNativeResult<'ctx>> {
-//   debug_assert!(ty_args.len() == 1);
-//   debug_assert!(args.len() == 1);
-//   let v = args.pop_front().unwrap().value_as::<SymContainer>()?;
+pub fn native_destroy_empty<'ctx>(
+  _context: &impl SymNativeContext<'ctx>,
+  ty_args: Vec<Type>,
+  mut args: VecDeque<SymValue<'ctx>>,
+) -> VMResult<SymNativeResult<'ctx>> {
+  debug_assert!(ty_args.len() == 1);
+  debug_assert!(args.len() == 1);
+  let v = args.pop_front().unwrap().value_as::<SymContainer>()?;
 
-//   // let cost = native_gas(context.cost_table(), NativeCostIndex::DESTROY_EMPTY, 1);
+  // let cost = native_gas(context.cost_table(), NativeCostIndex::DESTROY_EMPTY, 1);
 
-//   check_elem_layout(&ty_args[0], &v)?;
+  check_elem_layout(&ty_args[0], &v)?;
 
-//   let is_empty = match &v {
-//     SymContainer::U8(v) => v.is_empty(),
-//     SymContainer::U64(v) => v.is_empty(),
-//     SymContainer::U128(v) => v.is_empty(),
-//     SymContainer::Bool(v) => v.is_empty(),
+  // let is_empty = match &v {
+  //   SymContainer::U8(v) => v.is_empty(),
+  //   SymContainer::U64(v) => v.is_empty(),
+  //   SymContainer::U128(v) => v.is_empty(),
+  //   SymContainer::Bool(v) => v.is_empty(),
 
-//     SymContainer::General(v) => v.is_empty(),
-//   };
+  //   SymContainer::General(v) => v.is_empty(),
+  // };
 
-//   if is_empty {
-//     Ok(SymNativeResult::ok(cost, vec![]))
-//   } else {
-//     Ok(SymNativeResult::err(
-//       // cost,
-//       VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(DESTROY_NON_EMPTY_VEC),
-//     ))
-//   }
-// }
+  // if is_empty {
+  //   Ok(SymNativeResult::ok(cost, vec![]))
+  // } else {
+  //   Ok(SymNativeResult::err(
+  //     // cost,
+  //     VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(DESTROY_NON_EMPTY_VEC),
+  //   ))
+  // }
+  Ok(SymNativeResult::ok(vec![]))
+}
 
 pub fn native_swap<'ctx>(
   _context: &impl SymNativeContext<'ctx>,

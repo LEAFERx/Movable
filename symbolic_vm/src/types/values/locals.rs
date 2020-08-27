@@ -22,7 +22,7 @@ use z3::Context;
 
 use crate::types::{
   values::{
-    values_impl::{SymValue, SymValueImpl, SymContainerRef, SymIndexedRef, SymContainer},
+    values_impl::{SymValue, SymValueImpl, SymContainerRef, SymIndexedRef, SymContainer, SymbolicContainerIndex},
   },
 };
 
@@ -61,7 +61,7 @@ impl<'ctx> SymLocals<'ctx> {
         | SymValueImpl::Address(_)
         | SymValueImpl::Signer(_) => Ok(SymValue(SymValueImpl::IndexedRef(SymIndexedRef {
           container_ref: SymContainerRef::Local(Rc::clone(&self.0)),
-          idx,
+          idx: SymbolicContainerIndex::Concrete(idx),
         }))),
 
         SymValueImpl::ContainerRef(_) | SymValueImpl::Invalid | SymValueImpl::IndexedRef(_) => Err(

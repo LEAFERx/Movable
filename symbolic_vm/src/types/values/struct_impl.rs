@@ -28,7 +28,7 @@ use z3::{
 
 use crate::types::{
   values::{
-    values_impl::SymValue,
+    values_impl::{SymValue, SymbolicContainerIndex},
     SymbolicMoveValue,
   },
 };
@@ -134,10 +134,16 @@ impl<'ctx> SymStructImpl<'ctx> {
     ))
   }
 
+  fn get_internal(&self, idx: usize) -> VMResult<SymValue<'ctx>> {
+    let ast = self.get_raw(idx)?;
+    let ty = &self.struct_type.layout[idx];
+    Ok(SymValue::from_ast_with_type_info(self.context, ast, ty)?)
+  }
+
   pub(super) fn unpack(self) -> VMResult<Vec<SymValue<'ctx>>> {
     let mut values = vec![];
     for idx in 0..self.struct_type.layout.len() {
-      values.push(self.get(idx)?);
+      values.push(self.get_internal(idx)?);
     }
     Ok(values)
   }
@@ -160,13 +166,21 @@ impl<'ctx> SymStructImpl<'ctx> {
     })
   }
 
-  pub(super) fn get(&self, idx: usize) -> VMResult<SymValue<'ctx>> {
+  pub(super) fn get(&self, idx: &SymbolicContainerIndex<'ctx>) -> VMResult<SymValue<'ctx>> {
+    let idx = idx.to_concrete().ok_or(
+      VMStatus::new(StatusCode::INVALID_DATA)
+        .with_message(format!("Symbolic index {:?} cannot be used on Struct", idx))
+    )?;
     let ast = self.get_raw(idx)?;
     let ty = &self.struct_type.layout[idx];
     Ok(SymValue::from_ast_with_type_info(self.context, ast, ty)?)
   }
 
-  pub(super) fn set(&mut self, idx: usize, val: SymValue<'ctx>) -> VMResult<()> {
+  pub(super) fn set(&mut self, idx: &SymbolicContainerIndex<'ctx>, val: SymValue<'ctx>) -> VMResult<()> {
+    let idx = idx.to_concrete().ok_or(
+      VMStatus::new(StatusCode::INVALID_DATA)
+        .with_message(format!("Symbolic index {:?} cannot be used on Struct", idx))
+    )?;
     self.set_raw(idx, val.as_ast()?)?;
     Ok(())
   }
