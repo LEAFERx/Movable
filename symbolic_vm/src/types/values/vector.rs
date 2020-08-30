@@ -55,7 +55,7 @@ impl<'ctx> SymVectorImpl<'ctx> {
       context: self.context,
       element_type: self.element_type.clone(),
       datatype: Rc::clone(&self.datatype),
-      data: self.data.translate(self.context),
+      data: self.data.clone(),
     }
   }
 
@@ -117,7 +117,7 @@ impl<'ctx> SymVectorImpl<'ctx> {
     let array_sort = Sort::array(context, &Sort::bitvector(context, 64), &range_sort);
     let vector_datatypesort = DatatypeBuilder::new(context)
       .variant("Vector", &[("array", &array_sort), ("length", &Sort::bitvector(context, 64))])
-      .finish("Vector");
+      .finish(format!("Vector<{}>", element_type.type_tag()?));
 
     let array = Array::fresh_const(context, "vector", &Sort::bitvector(context, 64), &range_sort);
     for i in 0..values.len() {
@@ -145,7 +145,7 @@ impl<'ctx> SymVectorImpl<'ctx> {
     let array_sort = Sort::array(context, &Sort::bitvector(context, 64), &range_sort);
     let vector_datatypesort = DatatypeBuilder::new(context)
       .variant("Vector", &[("array", &array_sort), ("length", &Sort::bitvector(context, 64))])
-      .finish("Vector");
+      .finish(format!("Vector<{}>", element_type.type_tag()?));
 
     Ok(Self {
       context,

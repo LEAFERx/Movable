@@ -2,3 +2,5 @@
 **/*.rs.bk
 
 Cargo.lock
+
+.z3-trace

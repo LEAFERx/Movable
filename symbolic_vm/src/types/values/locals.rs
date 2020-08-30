@@ -51,7 +51,11 @@ impl<'ctx> SymLocals<'ctx> {
     match &*r {
       SymContainer::Locals { locals: v, .. } => match &v[idx] {
         SymValueImpl::Container(r) => Ok(SymValue(SymValueImpl::ContainerRef(
-          SymContainerRef::Local(Rc::clone(r)),
+          SymContainerRef::Local {
+            container: Rc::clone(r),
+            // r is always a reference, so location is not needed
+            location: None,
+          },
         ))),
 
         SymValueImpl::U8(_)
@@ -60,7 +64,10 @@ impl<'ctx> SymLocals<'ctx> {
         | SymValueImpl::Bool(_)
         | SymValueImpl::Address(_)
         | SymValueImpl::Signer(_) => Ok(SymValue(SymValueImpl::IndexedRef(SymIndexedRef {
-          container_ref: SymContainerRef::Local(Rc::clone(&self.0)),
+          container_ref: SymContainerRef::Local {
+            container: Rc::clone(&self.0),
+            location: None,
+          },
           idx: SymbolicContainerIndex::Concrete(idx),
         }))),
 

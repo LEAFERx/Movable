@@ -103,12 +103,17 @@ pub(super) enum SymContainer<'ctx> {
 /// A ContainerRef is a direct reference to a container, which could live either in the frame
 /// or in global storage. In the latter case, it also keeps a status flag indicating whether
 /// the container has been possibly modified.
+/// The location is used for Struct and Vector
 #[derive(Debug)]
 pub(super) enum SymContainerRef<'ctx> {
-  Local(Rc<RefCell<SymContainer<'ctx>>>),
+  Local {
+    container: Rc<RefCell<SymContainer<'ctx>>>,
+    location: Option<Box<SymIndexedRef<'ctx>>>,
+  },
   Global {
     status: Rc<RefCell<GlobalDataStatus>>,
     container: Rc<RefCell<SymContainer<'ctx>>>,
+    location: Option<Box<SymIndexedRef<'ctx>>>,
   },
 }
 
@@ -311,14 +316,14 @@ fn take_unique_ownership<T: Debug>(r: Rc<RefCell<T>>) -> VMResult<T> {
 impl<'ctx> SymContainerRef<'ctx> {
   pub(super) fn borrow(&self) -> Ref<SymContainer<'ctx>> {
     match self {
-      Self::Local(container) | Self::Global { container, .. } => container.borrow(),
+      Self::Local { container, .. } | Self::Global { container, .. } => container.borrow(),
     }
   }
 
   pub(super) fn borrow_mut(&self) -> RefMut<SymContainer<'ctx>> {
     match self {
-      Self::Local(container) => container.borrow_mut(),
-      Self::Global { container, status } => {
+      Self::Local { container, .. } => container.borrow_mut(),
+      Self::Global { container, status, .. } => {
         *status.borrow_mut() = GlobalDataStatus::Dirty;
         container.borrow_mut()
       }
@@ -416,11 +421,11 @@ impl<'ctx> SymContainer<'ctx> {
         locals: locals.iter().map(|x| x.copy_value()).collect(),
       },
       Struct(v) => Struct(v.copy_value()),
-      Vector(v) => Vector(v.copy_value()),
-      VecU8(v) => Vector(v.copy_value()),
-      VecU64(v) => Vector(v.copy_value()),
-      VecU128(v) => Vector(v.copy_value()),
-      VecBool(v) => Vector(v.copy_value()),
+      Vector(v)
+      | VecU8(v)
+      | VecU64(v)
+      | VecU128(v)
+      | VecBool(v) => Vector(v.copy_value()),
     }
   }
 }
@@ -448,10 +453,20 @@ impl<'ctx> SymIndexedRef<'ctx> {
 impl<'ctx> SymContainerRef<'ctx> {
   fn copy_value(&self) -> Self {
     match self {
-      Self::Local(container) => Self::Local(Rc::clone(container)),
-      Self::Global { status, container } => Self::Global {
+      Self::Local { container, location } => Self::Local {
+        container: Rc::clone(container),
+        location: match location {
+          Some(loc) => Some(Box::new(loc.copy_value())),
+          None => None,
+        },
+      },
+      Self::Global { status, container, location } => Self::Global {
         status: Rc::clone(status),
         container: Rc::clone(container),
+        location: match location {
+          Some(loc) => Some(Box::new(loc.copy_value())),
+          None => None,
+        },
       },
     }
   }
@@ -660,11 +675,25 @@ impl<'ctx> SymReference<'ctx> {
 **************************************************************************************/
 
 impl<'ctx> SymContainerRef<'ctx> {
+  fn write_propagate(&self) -> VMResult<()> {
+    let loc = match self {
+      Self::Local { location, .. } => location,
+      Self::Global { location, .. } => location,
+    };
+    match loc {
+      // copy_value here because read_ref and write_ref will consume self
+      Some(r) => r.copy_value().write_ref(self.copy_value().read_ref()?)?,
+      None => {},
+    }
+    Ok(())
+  }
+
   fn write_ref(self, v: SymValue<'ctx>) -> VMResult<()> {
     match v.0 {
       SymValueImpl::Container(r) => {
-        *self.borrow_mut() = take_unique_ownership(r)?
+        *self.borrow_mut() = take_unique_ownership(r)?;
         // TODO: can we simply take the Rc?
+        self.write_propagate()?;
       }
       _ => {
         return Err(
@@ -684,8 +713,10 @@ impl<'ctx> SymIndexedRef<'ctx> {
     match &x.0 {
       SymValueImpl::IndexedRef(_)
       | SymValueImpl::ContainerRef(_)
-      | SymValueImpl::Invalid
-      | SymValueImpl::Container(_) => {
+      | SymValueImpl::Invalid => {
+      // TODO: comment this out for write_propagte
+      // find a better way?
+      // | SymValueImpl::Container(_) => {
         return Err(
           VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!(
             "cannot write value {:?} to indexed ref {:?}",
@@ -713,6 +744,7 @@ impl<'ctx> SymIndexedRef<'ctx> {
         )
       }
     }
+    self.container_ref.write_propagate()?;
     Ok(())
   }
 }
@@ -767,14 +799,68 @@ impl<'ctx> SymContainerRef<'ctx> {
         // TODO: check for the impossible combinations.
         SymValueImpl::Container(container) => {
           let r = match self {
-            Self::Local(_) => Self::Local(Rc::clone(container)),
+            Self::Local { .. } => Self::Local {
+              container: Rc::clone(container),
+              // Locals does not need location
+              location: None,
+            },
             Self::Global { status, .. } => Self::Global {
               status: Rc::clone(status),
               container: Rc::clone(container),
+              // Locals does not need location
+              location: None
             },
           };
           SymValueImpl::ContainerRef(r)
         }
+        _ => SymValueImpl::IndexedRef(SymIndexedRef {
+          idx,
+          container_ref: self.copy_value(),
+        }),
+      },
+      SymContainer::Struct(v) => match &v.get(&idx)?.0 {
+        SymValueImpl::Container(container) => {
+          let location = Some(Box::new(SymIndexedRef {
+            idx,
+            container_ref: self.copy_value(),
+          }));
+          let r = match self {
+            Self::Local { .. } => Self::Local {
+              container: Rc::clone(container),
+              location,
+            },
+            Self::Global { status, .. } => Self::Global {
+              status: Rc::clone(status),
+              container: Rc::clone(container),
+              location,
+            }
+          };
+          SymValueImpl::ContainerRef(r)
+        },
+        _ => SymValueImpl::IndexedRef(SymIndexedRef {
+          idx,
+          container_ref: self.copy_value(),
+        }),
+      },
+      SymContainer::Vector(v) => match &v.get(&idx)?.0 {
+        SymValueImpl::Container(container) => {
+          let location = Some(Box::new(SymIndexedRef {
+            idx,
+            container_ref: self.copy_value(),
+          }));
+          let r = match self {
+            Self::Local { .. } => Self::Local {
+              container: Rc::clone(container),
+              location,
+            },
+            Self::Global { status, .. } => Self::Global {
+              status: Rc::clone(status),
+              container: Rc::clone(container),
+              location,
+            }
+          };
+          SymValueImpl::ContainerRef(r)
+        },
         _ => SymValueImpl::IndexedRef(SymIndexedRef {
           idx,
           container_ref: self.copy_value(),
@@ -1702,6 +1788,7 @@ impl<'ctx> SymGlobalValue<'ctx> {
       SymContainerRef::Global {
         status: Rc::clone(&self.status),
         container: Rc::clone(&self.container),
+        location: None,
       },
     )))
   }
@@ -1786,14 +1873,27 @@ impl<'ctx> Display for SymContainerRef<'ctx> {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     // TODO: this could panic.
     match self {
-      Self::Local(r) => write!(f, "({}, {})", Rc::strong_count(r), &*r.borrow()),
-      Self::Global { status, container } => write!(
-        f,
-        "({:?}, {}, {})",
-        &*status.borrow(),
-        Rc::strong_count(container),
-        &*container.borrow()
-      ),
+      Self::Local { container, location } => {
+        let loc = match location {
+          Some(l) => format!(" @ {}", l.as_ref()),
+          None => "".to_string(),
+        };
+        write!(f, "({}, {}{})", Rc::strong_count(container), &*container.borrow(), loc)
+      },
+      Self::Global { status, container, location } => {
+        let loc = match location {
+          Some(l) => format!(" @ {}", l.as_ref()),
+          None => "".to_string(),
+        };
+        write!(
+          f,
+          "({:?}, {}, {}{})",
+          &*status.borrow(),
+          Rc::strong_count(container),
+          &*container.borrow(),
+          loc,
+        )
+      },
     }
   }
 }
@@ -2164,7 +2264,6 @@ impl<'ctx> SymbolicMoveValue<'ctx> for SymValueImpl<'ctx> {
     }
   }
 }
-
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymValue<'ctx> {
   fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {

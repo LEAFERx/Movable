@@ -1,4 +1,3 @@
-
 use bytecode_verifier::VerifiedModule;
 // use libra_logger::prelude::*;
 use libra_types::vm_error::{StatusCode, VMStatus};

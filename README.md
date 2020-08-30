@@ -34,7 +34,7 @@ cargo run <BYTECODE_FILE> -f <FUNCTION_NAME>
 
 ### Symbolic VM
 
-- Vector support
+- Vector bound check (in plugin or not?)
 - Native function modelling
 - Stdlib test
 - More benchmarks
@@ -45,3 +45,4 @@ cargo run <BYTECODE_FILE> -f <FUNCTION_NAME>
 ### Plugin System
 
 - Single instruction listening support (intarith plugin added)
+- Verification plugin support

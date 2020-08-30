@@ -52,7 +52,7 @@ impl<'ctx> SymStructImpl<'ctx> {
       context: self.context,
       struct_type: self.struct_type.clone(),
       datatype: Rc::clone(&self.datatype),
-      data: self.data.translate(self.context),
+      data: self.data.clone(),
     }
   }
 
@@ -208,8 +208,9 @@ pub(super) fn fat_type_to_sort<'ctx>(context: &'ctx Context, ty: &FatType) -> VM
 
 pub(super) fn fat_type_vector_to_sort<'ctx>(context: &'ctx Context, ty: &FatType) -> VMResult<Sort<'ctx>> {
   let element_sort = fat_type_to_sort(context, ty)?;
+  let array_sort = Sort::array(context, &Sort::bitvector(context, 64), &element_sort);
   let sort = DatatypeBuilder::new(context)
-    .variant("Vector", &[("array", &element_sort), ("length", &Sort::bitvector(context, 64))])
+    .variant("Vector", &[("array", &array_sort), ("length", &Sort::bitvector(context, 64))])
     .finish(format!("Vector<{}>", ty.type_tag()?))
     .sort;
   Ok(sort)
