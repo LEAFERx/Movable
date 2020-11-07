@@ -6,6 +6,7 @@ use crate::{
   state::{
     vm_context::SymbolicVMContext,
   },
+  types::values::SymValue,
 };
 
 use vm::{
@@ -18,20 +19,32 @@ use move_vm_types::loaded_data::runtime_types::Type;
 pub trait Plugin<'ctx> {
   fn on_before_execute_instrcution<'vtxn>(
     &self,
-    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
-    instruction: &Bytecode
+    _interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    _instruction: &Bytecode
   ) -> VMResult<()> {
     Ok(())
   }
 
   fn on_before_call<'vtxn>(
     &self,
-    vm_ctx: &SymbolicVMContext<'vtxn, 'ctx>,
-    loader: &Loader,
-    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
-    func: &Function,
-    ty_args: Vec<Type>,
+    _vm_ctx: &SymbolicVMContext<'vtxn, 'ctx>,
+    _loader: &Loader,
+    _interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    _func: &Function,
+    _ty_args: Vec<Type>,
   ) -> VMResult<bool> {
     Ok(false)
+  }
+
+  fn on_before_execute<'vtxn>(&self) -> VMResult<()> {
+    Ok(())
+  }
+
+  fn on_after_execute<'vtxn>(
+    &self,
+    _interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    _return_values: &[SymValue<'ctx>],
+  ) -> VMResult<()> {
+    Ok(())
   }
 }

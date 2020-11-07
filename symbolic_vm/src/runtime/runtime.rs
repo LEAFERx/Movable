@@ -3,7 +3,7 @@ use bytecode_verifier::VerifiedModule;
 use libra_types::vm_error::{StatusCode, VMStatus};
 use move_core_types::{
   // gas_schedule::CostTable,
-  identifier::{IdentStr, Identifier},
+  identifier::IdentStr,
   language_storage::{ModuleId, TypeTag},
 };
 use move_vm_types::{
@@ -25,10 +25,10 @@ use std::{
   sync::Arc,
 };
 
-use z3::{Context, ast::{Ast, BV, Bool}};
+use z3::Context;
 use crate::{
-  plugin::{PluginManager, IntegerArithmeticPlugin, VerificationPlugin, Specification},
-  types::values::{SymValue, SymBool, SymU64, VMSymValueCast, SymbolicMoveValue},
+  plugin::PluginManager,
+  types::values::{SymValue, SymbolicMoveValue},
   runtime::loader::Function,
 };
 
@@ -125,52 +125,13 @@ impl<'ctx> VMRuntime<'ctx> {
     z3_ctx: &'ctx Context,
     vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
     txn_data: &'vtxn TransactionMetadata,
+    plugin_manager: &mut PluginManager<'_, 'ctx>,
     // gas_schedule: &CostTable,
     module: &ModuleId,
     function_name: &IdentStr,
     ty_args: Vec<TypeTag>,
     args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
-    let int_plugin = IntegerArithmeticPlugin::new();
-    let target_spec = Specification::new(
-      |_a: &[SymValue<'ctx>]| SymBool::from(z3_ctx, true),
-      |_a: &[SymValue<'ctx>], _r: &[SymValue<'ctx>]| SymBool::from(z3_ctx, true),
-      |_a: &[SymValue<'ctx>]| SymBool::from(z3_ctx, true)
-    );
-    let abs_spec = Specification::new(
-      |_a: &[SymValue<'ctx>]| SymBool::from(z3_ctx, true),
-      |_a: &[SymValue<'ctx>], r: &[SymValue<'ctx>]| {
-        // !!! bad type conversions and clones
-        // !!! figure it out
-        let ret = VMSymValueCast::<SymU64<'ctx>>::cast(r[0].copy_value()).unwrap();
-        SymBool::from_ast(ret.as_inner().bvuge(&BV::from_u64(z3_ctx, 10, 64)))
-      },
-      |_a: &[SymValue<'ctx>]| SymBool::from(z3_ctx, true)
-    );
-    let abs_spec_right = Specification::new(
-      |_a: &[SymValue<'ctx>]| SymBool::from(z3_ctx, true),
-      |a: &[SymValue<'ctx>], r: &[SymValue<'ctx>]| {
-        // !!! bad type conversions and clones
-        // !!! figure it out
-        let arg = VMSymValueCast::<SymU64<'ctx>>::cast(a[0].copy_value()).unwrap();
-        let ret = VMSymValueCast::<SymU64<'ctx>>::cast(r[0].copy_value()).unwrap();
-        let const_ten = BV::from_u64(z3_ctx, 10, 64);
-        let arg_ast = arg.as_inner();
-        let ret_ast = ret.as_inner();
-        let cond_pos = arg_ast.bvuge(&const_ten).implies(&ret_ast._eq(&arg_ast));
-        let cond_neg = arg_ast.bvult(&const_ten).implies(&ret_ast._eq(&const_ten.bvsub(&arg_ast)));
-        let cond = Bool::and(z3_ctx, &[&cond_pos, &cond_neg]);
-        SymBool::from_ast(cond)
-      },
-      |_a: &[SymValue<'ctx>]| SymBool::from(z3_ctx, true)
-    );
-    let mut verification_plugin = VerificationPlugin::new(target_spec);
-    let func_name = Identifier::new("abs_on_ten").unwrap();
-    verification_plugin.add_spec(func_name, abs_spec_right);
-    let mut manager = PluginManager::new();
-    manager.add_plugin(int_plugin);
-    manager.add_plugin(verification_plugin);
-  
     let mut type_params = vec![];
     for ty in &ty_args {
       type_params.push(self.loader.load_type(ty, vm_ctx)?);
@@ -200,14 +161,14 @@ impl<'ctx> VMRuntime<'ctx> {
     interp_stack.push(interp);
     loop {
       if let Some(interp) = interp_stack.pop() {
-        match interp.execute(&self.loader, vm_ctx, &mut manager)? {
+        match interp.execute(&self.loader, vm_ctx, plugin_manager)? {
           SymInterpreterExecutionResult::Fork(forks) => {
             for interp in forks {
               interp_stack.push(interp);
             }
           }
           SymInterpreterExecutionResult::Report(model, return_values) => {
-            println!("---------------------");
+            println!("-------REPORT BEGIN-------");
             println!("Args:");
             for (idx, val) in args.iter().enumerate() {
               println!("Index {}: {:#?}", idx, model.eval(val));
@@ -216,7 +177,7 @@ impl<'ctx> VMRuntime<'ctx> {
             for (idx, val) in return_values.into_iter().enumerate() {
               println!("Index {}: {:#?}", idx, model.eval(&val.as_ast()?));
             }
-            println!("---------------------");
+            println!("-------REPORT END---------");
           }
         }
       } else {

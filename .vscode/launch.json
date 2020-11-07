@@ -1,0 +1,65 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in library 'movable'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--lib",
+          "--package=movable"
+        ],
+        "filter": {
+          "name": "movable",
+          "kind": "lib"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'movable'",
+      "cargo": {
+        "args": [
+          "build",
+          "--bin=movable",
+          "--package=movable"
+        ],
+        "filter": {
+          "name": "movable",
+          "kind": "bin"
+        }
+      },
+      "args": [
+        "testsuites/abs.mv",
+        "-f",
+        "f"
+      ],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in executable 'movable'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--bin=movable",
+          "--package=movable"
+        ],
+        "filter": {
+          "name": "movable",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

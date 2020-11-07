@@ -99,6 +99,8 @@ pub struct SymInterpreter<'vtxn, 'ctx> {
   // gas_schedule: &'vtxn CostTable,
   /// Z3 solver
   pub solver: Solver<'ctx>,
+  pub path_conditions: Vec<SymBool<'ctx>>,
+  pub spec_conditions: Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)>,
   /// Intermediate state
   pub state: SymInterpreterState<'ctx>, 
 }
@@ -137,7 +139,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     for (i, value) in args.iter().enumerate() {
       locals.store_loc(i, value.copy_value())?;
     }
-    let current_frame = SymFrame::new(function, ty_args, locals);
+    let current_frame = SymFrame::new(z3_ctx, function, ty_args, locals);
     interp.call_stack.push(current_frame).or_else(|frame| {
       let err = VMStatus::new(StatusCode::CALL_STACK_OVERFLOW);
       Err(interp.maybe_core_dump(err, &frame))
@@ -159,6 +161,8 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
       // gas_schedule,
       txn_data,
       solver: Solver::new(&z3_ctx),
+      path_conditions: vec![],
+      spec_conditions: vec![],
       state: vm_ctx.create_intermediate_state(),
     }
   }
@@ -169,6 +173,10 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
       call_stack: self.call_stack.clone(),
       txn_data: self.txn_data,
       solver: self.solver.translate(self.solver.get_context()),
+      path_conditions: self.path_conditions.clone(),
+      spec_conditions: self.spec_conditions.iter().map(
+        |(args, cond)| (args.iter().map(|v| v.copy_value()).collect(), cond.clone())
+      ).collect(),
       state: self.state.clone(),
     }
   }
@@ -201,6 +209,8 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
               for _ in 0..current_frame.function.return_count() {
                 return_values.push(self.operand_stack.pop()?);
               }
+              manager.after_execute(&mut self, return_values.as_slice())?;
+              self.solver.check(); // ??? avoid unchecked get_model
               return Ok(SymInterpreterExecutionResult::Report(self.solver.get_model(), return_values));
             }
           }
@@ -289,11 +299,16 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
 
             self.solver.assert(&condition.as_inner());
             if self.solver.check() == SatResult::Sat {
+              self.path_conditions.push(condition.clone());
               forks.push(self);
             }
-
-            forked_interp.solver.assert(&condition.as_inner().not());
+            
+            let neg_condition_ast = condition.as_inner().not();
+            let mut neg_condition = condition.clone();
+            forked_interp.solver.assert(&neg_condition_ast);
+            neg_condition.set_ast(neg_condition_ast);
             if forked_interp.solver.check() == SatResult::Sat {
+              forked_interp.path_conditions.push(neg_condition);
               forks.push(forked_interp);
             }
             return Ok(SymInterpreterExecutionResult::Fork(forks));
@@ -333,7 +348,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     for (i, value) in args.iter().enumerate() {
       locals.store_loc(i, value.copy_value())?;
     }
-    let mut current_frame = SymFrame::new(function, ty_args, locals);
+    let mut current_frame = SymFrame::new(solver.get_context(), function, ty_args, locals);
     loop {
       let resolver = current_frame.resolver(loader);
       let exit_code = current_frame //self
@@ -470,6 +485,7 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
       locals.store_loc(arg_count - i - 1, self.operand_stack.pop()?)?;
     }
     Ok(SymFrame::new(
+      context,
       func,
       ty_args,
       locals
@@ -932,6 +948,7 @@ impl<'ctx> SymCallStack<'ctx> {
 /// the function itself.
 #[derive(Debug, Clone)]
 struct SymFrame<'ctx> {
+  z3_ctx: &'ctx Context,
   pc: u16,
   locals: SymLocals<'ctx>,
   function: Arc<Function>,
@@ -954,11 +971,13 @@ impl<'ctx> SymFrame<'ctx> {
   ///
   /// The locals must be loaded before calling this.
   fn new(
+    z3_ctx: &'ctx Context,
     function: Arc<Function>,
     ty_args: Vec<Type>,
     locals: SymLocals<'ctx>
   ) -> Self {
     SymFrame {
+      z3_ctx,
       pc: 0,
       locals,
       function,
@@ -1281,11 +1300,11 @@ impl<'ctx> SymFrame<'ctx> {
           }
           Bytecode::Or => {
             // gas!(const_instr: context, interpreter, Opcodes::OR)?;
-            interpreter.binop_bool(|l: SymBool<'ctx>, r| Ok(l.or(&r)))?
+            interpreter.binop_bool(|l: SymBool<'ctx>, r| Ok(SymBool::or(self.z3_ctx, &[l, r], true)))?
           }
           Bytecode::And => {
             // gas!(const_instr: context, interpreter, Opcodes::AND)?;
-            interpreter.binop_bool(|l: SymBool<'ctx>, r| Ok(l.and(&r)))?
+            interpreter.binop_bool(|l: SymBool<'ctx>, r| Ok(SymBool::and(self.z3_ctx, &[l, r], true)))?
           }
           Bytecode::Lt => {
             // gas!(const_instr: context, interpreter, Opcodes::LT)?;

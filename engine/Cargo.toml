@@ -15,6 +15,7 @@ vm = { path = "../../libra/language/vm" }
 libra-types = { path = "../../libra/types" }
 
 z3 = "0.6"
+# z3 = { path = "/root/z3.rs/z3" }
 serde = "1.0"
 
 symbolic_vm = { path = "../symbolic_vm", package = "movable-symbolic-vm" }

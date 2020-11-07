@@ -16,25 +16,31 @@ use crate::types::values::{
 };
 
 #[derive(Debug, Clone)]
-pub struct SymAccountAddress<'ctx>(BV<'ctx>);
+pub struct SymAccountAddress<'ctx> {
+  ast: BV<'ctx>,
+  is_constant: bool,
+}
 
 impl<'ctx> SymAccountAddress<'ctx> {
   pub const LENGTH: usize = AccountAddress::LENGTH;
 
   pub fn new(context: &'ctx Context, address: AccountAddress) -> Self {
     let value = u128::from_ne_bytes(address.into());
-    let bv = BV::from_u64(context, (value >> 64) as u64, 64)
+    let ast = BV::from_u64(context, (value >> 64) as u64, 64)
       .concat(&BV::from_u64(context, value as u64, 64));
-    Self(bv)
+    Self {
+      ast,
+      is_constant: true,
+    }
   }
 
-  pub fn from_ast(ast: BV<'ctx>) -> Self {
-    Self(ast)
+  pub fn from_ast(ast: BV<'ctx>, is_constant: bool) -> Self {
+    Self { ast, is_constant }
   }
 
   pub fn into_address(self) -> VMResult<AccountAddress> {
-    let high = self.0.extract(127, 64).simplify();
-    let low = self.0.extract(63, 0).simplify();
+    let high = self.ast.extract(127, 64).simplify();
+    let low = self.ast.extract(63, 0).simplify();
     
     match (high.as_u64(), low.as_u64()) {
       (Some(high), Some(low)) => {
@@ -50,12 +56,19 @@ impl<'ctx> SymAccountAddress<'ctx> {
   }
 
   pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
-    Ok(SymBool::from_ast(self.0._eq(&other.0)))
+    let mut operand = vec![];
+    if !self.is_constant {
+      operand.push(Dynamic::from_ast(&self.ast));
+    }
+    if !other.is_constant {
+      operand.push(Dynamic::from_ast(&other.ast));
+    }
+    Ok(SymBool::from_ast(self.ast._eq(&other.ast), operand))
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymAccountAddress<'ctx> {
   fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
-    Ok(Dynamic::from_ast(&self.0))
+    Ok(Dynamic::from_ast(&self.ast))
   }
 }

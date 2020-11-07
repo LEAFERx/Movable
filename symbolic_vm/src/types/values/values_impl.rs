@@ -529,24 +529,19 @@ impl<'ctx> SymContainer<'ctx> {
     use SymContainer::*;
 
     let res = match (&self, &other) {
-      // Let's just assume context is equal for same <'ctx>
-      (Locals { context, locals: l }, Locals { locals: r, .. }) => {
-        if l.len() != r.len() {
-          return Ok(SymBool::from(context, false));
-        }
-        let mut res = SymBool::from(context, true);
-        for (v1, v2) in l.iter().zip(r.iter()) {
-          res = res.and(&v1.equals(v2)?);
-        }
-        res
-      }
-      (Struct(l), Struct(r)) => SymBool::from_ast(l.equals(r)),
+      (Struct(l), Struct(r)) => {
+        let bool_operand = vec![Dynamic::from_ast(&l.data), Dynamic::from_ast(&r.data)];
+        SymBool::from_ast(l.equals(r), bool_operand)
+      },
       (Vector(l), Vector(r)) 
       | (VecU8(l), VecU8(r))
       | (VecU64(l), VecU64(r))
       | (VecU128(l), VecU128(r))
       | (VecBool(l), VecBool(r))
-      => SymBool::from_ast(l.equals(r)),
+      => {
+        let bool_operand = vec![Dynamic::from_ast(&l.data), Dynamic::from_ast(&r.data)];
+        SymBool::from_ast(l.equals(r), bool_operand)
+      },
       _ => {
         return Err(
           VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!(
@@ -928,35 +923,51 @@ impl<'ctx> SymValue<'ctx> {
           VMStatus::new(StatusCode::INVALID_DATA)
             .with_message(format!("{:?} can not be made into Bool", ast))
         )?;
-        Ok(SymValue::from_sym_bool(SymBool::from_ast(ast)))
+        Ok(SymValue::from_sym_bool(SymBool::from_ast(ast, vec![])))
       }
       FatType::U8 => {
         let ast = ast.as_bv().ok_or(
           VMStatus::new(StatusCode::INVALID_DATA)
-            .with_message(format!("{:?} can not be made into Bool", ast))
+            .with_message(format!("{:?} can not be made into U8", ast))
         )?;
-        Ok(SymValue::from_sym_u8(SymU8::from_ast(ast)))
+        let is_constant = match ast.as_u64() {
+          Some(_) => true,
+          None=> false,
+        };
+        Ok(SymValue::from_sym_u8(SymU8::from_ast(ast, is_constant)))
       }
       FatType::U64 => {
         let ast = ast.as_bv().ok_or(
           VMStatus::new(StatusCode::INVALID_DATA)
-            .with_message(format!("{:?} can not be made into Bool", ast))
+            .with_message(format!("{:?} can not be made into U64", ast))
         )?;
-        Ok(SymValue::from_sym_u64(SymU64::from_ast(ast)))
+        let is_constant = match ast.as_u64() {
+          Some(_) => true,
+          None=> false,
+        };
+        Ok(SymValue::from_sym_u64(SymU64::from_ast(ast, is_constant)))
       }
       FatType::U128 => {
         let ast = ast.as_bv().ok_or(
           VMStatus::new(StatusCode::INVALID_DATA)
-            .with_message(format!("{:?} can not be made into Bool", ast))
+            .with_message(format!("{:?} can not be made into U128", ast))
         )?;
-        Ok(SymValue::from_sym_u128(SymU128::from_ast(ast)))
+        let is_constant = match ast.as_u64() {
+          Some(_) => true,
+          None=> false,
+        };
+        Ok(SymValue::from_sym_u128(SymU128::from_ast(ast, is_constant)))
       }
       FatType::Address | FatType::Signer => {
         let ast = ast.as_bv().ok_or(
           VMStatus::new(StatusCode::INVALID_DATA)
             .with_message(format!("{:?} can not be made into Bool", ast))
         )?;
-        let addr = SymAccountAddress::from_ast(ast);
+        let is_constant = match ast.as_u64() {
+          Some(_) => true,
+          None=> false,
+        };
+        let addr = SymAccountAddress::from_ast(ast, is_constant);
         Ok(SymValue::from_sym_address(addr))
       }
       FatType::Vector(ty) => {

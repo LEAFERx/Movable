@@ -20,7 +20,7 @@ use crate::{
   state::{
     vm_context::SymbolicVMContext,
   },
-  types::values::{SymBool, SymValue},
+  types::values::{SymBool, SymValue, SymbolicMoveValue},
 };
 
 use move_vm_types::loaded_data::runtime_types::Type;
@@ -30,7 +30,7 @@ use std::{
   convert::TryInto,
 };
 
-use z3::SatResult;
+use z3::{ast::{Bool, Dynamic}, Context, Solver, SatResult};
 
 pub struct Specification<'a, 'ctx> {
   pre: Box<dyn Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
@@ -65,13 +65,15 @@ impl<'a, 'ctx> Specification<'a, 'ctx> {
 }
 
 pub struct VerificationPlugin<'a, 'ctx> {
+  context: &'ctx Context,
   target: Specification<'a, 'ctx>,
   specs: HashMap<Identifier, Specification<'a, 'ctx>>,
 }
 
 impl<'a, 'ctx> VerificationPlugin<'a, 'ctx> {
-  pub fn new(target: Specification<'a, 'ctx>) -> Self {
+  pub fn new(context: &'ctx Context, target: Specification<'a, 'ctx>) -> Self {
     Self {
+      context,
       target,
       specs: HashMap::new(),
     }
@@ -85,11 +87,11 @@ impl<'a, 'ctx> VerificationPlugin<'a, 'ctx> {
 impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
   fn on_before_call<'vtxn>(
     &self,
-    vm_ctx: &SymbolicVMContext<'vtxn, 'ctx>,
-    loader: &Loader,
+    _vm_ctx: &SymbolicVMContext<'vtxn, 'ctx>,
+    _loader: &Loader,
     interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     func: &Function,
-    ty_args: Vec<Type>,
+    _ty_args: Vec<Type>,
   ) -> VMResult<bool> {
     match self.specs.get(&Identifier::new(func.name()).unwrap())  {
       Some(spec) => {
@@ -118,7 +120,10 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
           };
           returns.push(val);
         }
-        solver.assert(spec.post(args.as_slice(), returns.as_slice()).as_inner());
+        let post_cond = spec.post(args.as_slice(), returns.as_slice());
+        solver.assert(post_cond.as_inner());
+        // !!! consider if at here solver is unsat
+        interpreter.spec_conditions.push((args, post_cond));
         for val in returns {
           interpreter.operand_stack.push(val)?;
         }
@@ -126,5 +131,89 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
       }
       None => Ok(false)
     }
+  }
+
+  fn on_after_execute<'vtxn>(
+    &self,
+    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    return_values: &[SymValue<'ctx>],
+  ) -> VMResult<()> {
+    interpreter.solver.push();
+    interpreter.solver.assert(self.target.post(&[], return_values).as_inner()); // !!! args should not be empty!!
+    if interpreter.solver.check() == SatResult::Sat {
+      interpreter.solver.pop(1);
+      return Ok(());
+    }
+    interpreter.solver.pop(1);
+    for (spec_inputs, spec) in interpreter.spec_conditions.iter() {
+      let spec_vars = spec.operand();
+      let solver = Solver::new(self.context);
+      let mut projected = vec![];
+      // Projections
+      for cond in interpreter.path_conditions.iter().chain(interpreter.spec_conditions.iter().map(|(_, s)| s)) {
+        // do not need to check self
+        if cond.as_inner() == spec.as_inner() {
+          projected.push(cond);
+          continue;
+        }
+        let mut flag = true;
+        for var in cond.operand().iter() {
+          let mut flag1 = false;
+          for spec_var in spec_vars.iter() {
+            if var == spec_var {
+              flag1 = true;
+              break;
+            }
+          }
+          if !flag1 {
+            flag = false;
+            break;
+          }
+        }
+        if flag {
+          projected.push(cond);
+        }
+      }
+      let phi = spec.as_inner();
+      let b = Bool::and(self.context, &projected.iter().map(|b| b.as_inner()).collect::<Vec<_>>());
+      let b_not = b.not();
+      solver.assert(phi);
+      solver.assert(&b_not);
+      match solver.check() {
+        SatResult::Sat => {
+          let mut projected_input = vec![];
+          // Project inputs
+          for cond in interpreter.path_conditions.iter().chain(interpreter.spec_conditions.iter().map(|(_, s)| s)) {
+            // do not need to check self
+            let mut flag = true;
+            for var in cond.operand().iter() {
+              let mut flag1 = false;
+              for spec_var in spec_inputs.iter() {
+                if var == &spec_var.as_ast()? {
+                  flag1 = true;
+                  break;
+                }
+              }
+              if !flag1 {
+                flag = false;
+                break;
+              }
+            }
+            if flag {
+              projected_input.push(cond);
+            }
+          }
+          let i = Bool::and(self.context, &projected_input.iter().map(|b| b.as_inner()).collect::<Vec<_>>());
+          println!("-------SUGGESTION BEGIN-------");
+          println!("previous condition:");
+          println!("{:#?}", spec.as_inner());
+          println!("suggested condition:");
+          println!("{:#?}", i.implies(&b));
+          println!("-------SUGGESTION END---------");
+        },
+        _ => {}
+      }
+    }
+    Ok(())
   }
 }

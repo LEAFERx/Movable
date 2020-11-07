@@ -342,7 +342,12 @@ pub fn native_length<'ctx>(
     ),
   }?;
 
-  Ok(SymNativeResult::ok(/* cost, */vec![SymValue::from_sym_u64(SymU64::from_ast(symbolic_len))]))
+  let is_constant = match symbolic_len.as_u64() {
+    Some(_) => true,
+    None=> false,
+  };
+
+  Ok(SymNativeResult::ok(/* cost, */vec![SymValue::from_sym_u64(SymU64::from_ast(symbolic_len, is_constant))]))
 }
 
 pub fn native_push_back<'ctx>(

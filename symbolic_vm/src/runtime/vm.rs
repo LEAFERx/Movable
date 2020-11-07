@@ -19,7 +19,10 @@ use vm::{
 };
 
 use z3::Context;
-use crate::types::values::SymValue;
+use crate::{
+  plugin::PluginManager,
+  types::values::SymValue,
+};
 
 pub struct SymbolicVM<'ctx> {
   runtime: VMRuntime<'ctx>,
@@ -41,6 +44,7 @@ impl<'ctx> SymbolicVM<'ctx> {
     // gas_schedule: &CostTable,
     vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
     txn_data: &'vtxn TransactionMetadata,
+    plugin_manager: &mut PluginManager<'_, 'ctx>,
     // ty_args: Vec<TypeTag>,
     // args: Vec<SymValue<'ctx>>,
   ) -> VMResult<()> {
@@ -49,6 +53,7 @@ impl<'ctx> SymbolicVM<'ctx> {
       self.context,
       vm_ctx,
       txn_data,
+      plugin_manager,
       // gas_schedule,
       module,
       function_name,

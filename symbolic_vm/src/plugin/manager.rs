@@ -5,6 +5,7 @@ use crate::{
     loader::{Loader, Function},
   },
   state::vm_context::SymbolicVMContext,
+  types::values::SymValue,
 };
 
 use vm::{
@@ -55,5 +56,23 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
       result = result || plugin.on_before_call(vm_ctx, loader, interpreter, func, ty_args.clone())?;
     }
     Ok(result)
+  }
+
+  pub(crate) fn before_execute(&self) -> VMResult<()> {
+    for plugin in self.plugins.iter() {
+      plugin.on_before_execute()?;
+    }
+    Ok(())
+  }
+
+  pub(crate) fn after_execute<'vtxn>(
+    &self,
+    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    return_values: &[SymValue<'ctx>],
+  ) -> VMResult<()> {
+    for plugin in self.plugins.iter() {
+      plugin.on_after_execute(interpreter, return_values)?;
+    }
+    Ok(())
   }
 }
