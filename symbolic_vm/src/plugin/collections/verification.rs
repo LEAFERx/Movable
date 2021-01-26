@@ -204,11 +204,12 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
             }
           }
           let i = Bool::and(self.context, &projected_input.iter().map(|b| b.as_inner()).collect::<Vec<_>>());
+          let suggested = Bool::and(self.context, &[&i.implies(&b), &i.not().implies(phi)]);
           println!("-------SUGGESTION BEGIN-------");
           println!("previous condition:");
           println!("{:#?}", spec.as_inner());
           println!("suggested condition:");
-          println!("{:#?}", i.implies(&b));
+          println!("{:#?}", suggested);
           println!("-------SUGGESTION END---------");
         },
         _ => {}
