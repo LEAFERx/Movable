@@ -1,0 +1,47 @@
+
+module Test{
+    import 0x0.Libra;
+    import 0x0.LibraAccount;
+    import 0x0.LibraCoin;
+    // import 0x0.Transaction;
+    
+    resource T {
+        // The value of the coin. May be zero
+        value: u64,
+    }
+
+    public TOD_Transaction1(reward:u64,receiver: address){
+        let coin: Self.T;
+        coin = LibraAccount.withdraw_from_sender(move(reward));
+        LibraAccount.deposit(move(receiver), move(coin));
+    }
+    public TOD_Transaction2(reward:u64,receiver: address){
+        let coin: Self.T;
+        coin = LibraAccount.withdraw_from_sender(move(reward));
+        LibraAccount.deposit(move(receiver), move(coin));
+    }
+    public TOD_Attack(sender:address, 
+                  owner:address, 
+                  reward:u64, 
+                  metadata:u64):bool {
+    // check whether sender is owner
+    let lock:bool;
+    let diff:u64;
+    let solution:u64;
+    lock = false;
+    diff = 111111;
+    if (copy(sender) == copy(owner)) {    
+        if (copy(metadata)==0) {return false;}    //throw
+        if (copy(lock)) {return false;}           //throw
+        if( copy(metadata) >= 111) {return false;}//throw
+        Self.TOD_Transaction2(move(sender),move(reward));
+        solution = move(metadata);
+        lock = true;
+        return true;                             //throw
+    }
+    if (copy(lock)) {return false;}               //throw
+    Self.TOD_Transaction1(move(sender),move(reward));
+}
+
+}
+
