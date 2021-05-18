@@ -1,9 +1,6 @@
 use move_core_types::{
   identifier::Identifier,
-};
-
-use libra_types::{
-  vm_error::{StatusCode, VMStatus},
+  vm_status::{StatusCode, VMStatus},
 };
 
 use vm::{
@@ -26,11 +23,20 @@ use crate::{
 use move_vm_types::loaded_data::runtime_types::Type;
 
 use std::{
-  collections::HashMap,
+  collections::{HashMap, HashSet, VecDeque},
   convert::TryInto,
+  iter::FromIterator,
 };
 
-use z3::{ast::{Bool, Dynamic}, Context, Solver, SatResult};
+use z3::{
+  ast::{Ast, Bool, Dynamic, exists_const},
+  Context,
+  Goal,
+  Solver,
+  SatResult,
+  Tactic,
+};
+use z3_sys::AstKind;
 
 pub struct Specification<'a, 'ctx> {
   pre: Box<dyn Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
@@ -65,15 +71,15 @@ impl<'a, 'ctx> Specification<'a, 'ctx> {
 }
 
 pub struct VerificationPlugin<'a, 'ctx> {
-  context: &'ctx Context,
+  z3_ctx: &'ctx Context,
   target: Specification<'a, 'ctx>,
   specs: HashMap<Identifier, Specification<'a, 'ctx>>,
 }
 
 impl<'a, 'ctx> VerificationPlugin<'a, 'ctx> {
-  pub fn new(context: &'ctx Context, target: Specification<'a, 'ctx>) -> Self {
+  pub fn new(z3_ctx: &'ctx Context, target: Specification<'a, 'ctx>) -> Self {
     Self {
-      context,
+      z3_ctx,
       target,
       specs: HashMap::new(),
     }
@@ -92,7 +98,7 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
     interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     func: &Function,
     _ty_args: Vec<Type>,
-  ) -> VMResult<bool> {
+  ) -> PartialVMResult<bool> {
     match self.specs.get(&Identifier::new(func.name()).unwrap())  {
       Some(spec) => {
         let z3_ctx = interpreter.state.get_z3_ctx();
@@ -108,8 +114,8 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
         let mut returns = vec![];
         let mut prefix = String::from(func.name());
         prefix.push_str("!return");
-        // !!! should consider generics, substitude ty_args
-        // !!! also model other type of returns
+        // TODO: should consider generics, substitude ty_args
+        // TODO: also model other type of returns
         for sig in &func.returns().0 {
           let val = match sig {
             SignatureToken::Bool => SymValue::new_bool(z3_ctx, &prefix),
@@ -122,7 +128,7 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
         }
         let post_cond = spec.post(args.as_slice(), returns.as_slice());
         solver.assert(post_cond.as_inner());
-        // !!! consider if at here solver is unsat
+        // TODO: consider if at here solver is unsat
         interpreter.spec_conditions.push((args, post_cond));
         for val in returns {
           interpreter.operand_stack.push(val)?;
@@ -133,81 +139,48 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
     }
   }
 
+  // fn on_after_call capture the return value
+
   fn on_after_execute<'vtxn>(
     &self,
     interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    // args: &[SymValue<'ctx>],
     return_values: &[SymValue<'ctx>],
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     interpreter.solver.push();
-    interpreter.solver.assert(self.target.post(&[], return_values).as_inner()); // !!! args should not be empty!!
+    interpreter.solver.assert(self.target.post(&[], return_values).as_inner()); // TODO: args should not be empty!!
     if interpreter.solver.check() == SatResult::Sat {
       interpreter.solver.pop(1);
+      println!("-------VERIFICATION BEGIN-------");
+      println!("Post condition meet in this path!");
+      println!("-------VERIFICATION END---------");
       return Ok(());
     }
+    println!("-------VERIFICATION BEGIN-------");
+    println!("Counter example found! See SUGGESTION and REPORT section.");
+    println!("-------VERIFICATION END---------");
     interpreter.solver.pop(1);
+    let pc = Bool::and(self.context,
+      &interpreter.path_conditions.iter()
+        .chain(interpreter.spec_conditions.iter().map(|(_, s)| s)).map(|v| v.as_inner())
+        .collect::<Vec<_>>());
     for (spec_inputs, spec) in interpreter.spec_conditions.iter() {
-      let spec_vars = spec.operand();
+      let spec_vars = collect_variables(spec.as_inner());
       let solver = Solver::new(self.context);
-      let mut projected = vec![];
-      // Projections
-      for cond in interpreter.path_conditions.iter().chain(interpreter.spec_conditions.iter().map(|(_, s)| s)) {
-        // do not need to check self
-        if cond.as_inner() == spec.as_inner() {
-          projected.push(cond);
-          continue;
-        }
-        let mut flag = true;
-        for var in cond.operand().iter() {
-          let mut flag1 = false;
-          for spec_var in spec_vars.iter() {
-            if var == spec_var {
-              flag1 = true;
-              break;
-            }
-          }
-          if !flag1 {
-            flag = false;
-            break;
-          }
-        }
-        if flag {
-          projected.push(cond);
-        }
-      }
+      let projected = project(self.context, &pc, &spec_vars).expect("Quantifier Elimination Failed!");
       let phi = spec.as_inner();
-      let b = Bool::and(self.context, &projected.iter().map(|b| b.as_inner()).collect::<Vec<_>>());
-      let b_not = b.not();
       solver.assert(phi);
-      solver.assert(&b_not);
+      solver.assert(&projected.not());
       match solver.check() {
         SatResult::Sat => {
-          let mut projected_input = vec![];
-          // Project inputs
-          for cond in interpreter.path_conditions.iter().chain(interpreter.spec_conditions.iter().map(|(_, s)| s)) {
-            // do not need to check self
-            let mut flag = true;
-            for var in cond.operand().iter() {
-              let mut flag1 = false;
-              for spec_var in spec_inputs.iter() {
-                if var == &spec_var.as_ast()? {
-                  flag1 = true;
-                  break;
-                }
-              }
-              if !flag1 {
-                flag = false;
-                break;
-              }
-            }
-            if flag {
-              projected_input.push(cond);
-            }
-          }
-          let i = Bool::and(self.context, &projected_input.iter().map(|b| b.as_inner()).collect::<Vec<_>>());
-          let suggested = Bool::and(self.context, &[&i.implies(&b), &i.not().implies(phi)]);
+          let inputs = HashSet::from_iter(spec_inputs.iter().map(|v| v.as_ast().unwrap()));
+          let projected_input = project(self.context, &pc, &inputs).expect("Quantifier Elimination Failed!");
+          let suggested = Bool::and(self.context, &[
+            &projected_input.implies(&Bool::and(self.context, &[&projected.not(), phi]).simplify()),
+            &projected_input.not().implies(phi)]);
           println!("-------SUGGESTION BEGIN-------");
           println!("previous condition:");
-          println!("{:#?}", spec.as_inner());
+          println!("{:#?}", phi);
           println!("suggested condition:");
           println!("{:#?}", suggested);
           println!("-------SUGGESTION END---------");
@@ -217,4 +190,32 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
     }
     Ok(())
   }
+}
+
+fn collect_variables<'ctx>(var: &impl Ast<'ctx>) -> HashSet<Dynamic<'ctx>> {
+  let mut queue: VecDeque<Dynamic<'ctx>> = VecDeque::new();
+  let mut result = HashSet::new();
+  queue.push_back(Dynamic::from_ast(var));
+  loop {
+    match queue.pop_front() {
+      Some(v) => if AstKind::App == v.kind() && v.children().len() == 0 {
+        result.insert(v);
+      } else {
+        queue.append(&mut VecDeque::from(v.children()));
+      },
+      None => break,
+    }
+  }
+  return result;
+}
+
+fn project<'ctx>(ctx: &'ctx Context, cond: &Bool<'ctx>, vars: &HashSet<Dynamic<'ctx>>) -> Option<Bool<'ctx>> {
+  let tactic = Tactic::new(ctx, "qe"); //.and_then(&Tactic::new(ctx, "simplify"));
+  let goal = Goal::new(ctx, false, false, false);
+  let bounds = collect_variables(cond);
+  let bounds = bounds.difference(vars).collect::<Vec<_>>();
+  goal.assert(&exists_const(ctx, &bounds, &[], cond));
+  let result = tactic.apply(&goal, None)
+    .list_subgoals().collect::<Vec<Goal>>();
+  result.first().map(|g| Bool::and(ctx, &g.get_formulas::<Bool<'ctx>>().iter().collect::<Vec<_>>()))
 }

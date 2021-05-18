@@ -4,9 +4,7 @@ use crate::{
   types::values::SymIntegerValue,
 };
 
-use libra_types::{
-  vm_error::{StatusCode, VMStatus},
-};
+use move_core_types::vm_status::{StatusCode, VMStatus};
 
 use vm::{
   errors::*,
@@ -28,7 +26,7 @@ impl<'ctx> Plugin<'ctx> for IntegerArithmeticPlugin {
     &self,
     interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     instruction: &Bytecode
-  ) -> VMResult<()>{
+  ) -> PartialVMResult<()>{
     let solver = &interpreter.solver;
     match instruction {
       Bytecode::Add => {
@@ -47,7 +45,7 @@ impl<'ctx> Plugin<'ctx> for IntegerArithmeticPlugin {
           }
           (l, r) => {
             let msg = format!("Cannot add {:?} and {:?}", l, r);
-            Err(VMStatus::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
+            Err(PartialVMError::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(msg))
           }
         }?;
         let result = bv_l.bvadd_no_overflow(bv_r, false).not();

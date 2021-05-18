@@ -1,4 +1,4 @@
-use libra_types::{
+use diem_types::{
   access_path::AccessPath,
   // vm_error::{StatusCode, VMStatus},
   // write_set::WriteSet,
@@ -6,9 +6,9 @@ use libra_types::{
 use move_core_types::{
   gas_schedule::{GasCarrier, GasUnits},
   language_storage::ModuleId,
+  value::MoveStructLayout,
 };
-use move_vm_state::data_cache::RemoteCache;
-use move_vm_types::loaded_data::types::FatStructType;
+use move_vm_runtime::data_cache::RemoteCache;
 use crate::{
   types::{values::SymGlobalValue},
   state::{
@@ -33,13 +33,13 @@ pub struct SymbolicVMContext<'vtxn, 'ctx> {
 /// only change its intermediate state
 impl<'vtxn, 'ctx> SymbolicVMContext<'vtxn, 'ctx> {
   pub fn new(
-    context: &'ctx Context,
+    z3_ctx: &'ctx Context,
     gas_left: GasUnits<GasCarrier>,
     data_cache: &'vtxn dyn RemoteCache
   ) -> Self {
     Self {
       gas_left,
-      data_view: SymbolicExecutionDataCache::new(context, data_cache),
+      data_view: SymbolicExecutionDataCache::new(z3_ctx, data_cache),
     }
   }
 
@@ -56,17 +56,17 @@ impl<'vtxn, 'ctx> SymbolicVMContext<'vtxn, 'ctx> {
   pub(crate) fn load_data(
     &mut self,
     ap: &AccessPath,
-    ty: &FatStructType,
-  ) -> VMResult<&Option<(FatStructType, SymGlobalValue<'ctx>)>> {
+    ty: &MoveStructLayout,
+  ) -> PartialVMResult<&Option<(MoveStructLayout, SymGlobalValue<'ctx>)>> {
     self.data_view.load_data(ap, ty).map(|x| &*x)
   }
 
   // Modules
-  pub fn load_module(&self, module: &ModuleId) -> VMResult<Vec<u8>> {
+  pub fn load_module(&self, module: &ModuleId) -> PartialVMResult<Vec<u8>> {
     self.data_view.load_module(module)
   }
 
-  pub fn publish_module(&mut self, module_id: ModuleId, module: Vec<u8>) -> VMResult<()> {
+  pub fn publish_module(&mut self, module_id: ModuleId, module: Vec<u8>) -> PartialVMResult<()> {
     self.data_view.publish_module(module_id, module)
   }
 

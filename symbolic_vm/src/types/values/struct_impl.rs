@@ -1,14 +1,15 @@
-use libra_types::{
-  vm_error::{
-    StatusCode,
-    VMStatus,
+use move_core_types::{
+  value::{
+    MoveStructLayout, MoveTypeLayout,
+  },
+  vm_status::{
+    StatusCode, VMStatus,
   },
 };
-use move_vm_types::{
-  // gas_schedule::NativeCostIndex,
-  loaded_data::types::{FatStructType, FatType},
-  // natives::function::native_gas,
-};
+// use move_vm_types::{
+//   gas_schedule::NativeCostIndex,
+//   natives::function::native_gas,
+// };
 use std::{
   cell::RefCell,
   fmt::Debug,
@@ -21,6 +22,7 @@ use vm::{
 use z3::{
   ast::{Ast, Datatype, Dynamic, Bool},
   Context,
+  DatatypeAccessor,
   DatatypeBuilder,
   DatatypeSort,
   Sort,
@@ -37,7 +39,7 @@ use crate::types::{
 #[derive(Debug)]
 pub(super) struct SymStructImpl<'ctx> {
   pub(super) context: &'ctx Context,
-  pub(super) struct_type: FatStructType,
+  pub(super) struct_type: MoveStructLayout,
   pub(super) datatype: Rc<RefCell<DatatypeSort<'ctx>>>,
   pub(super) data: Datatype<'ctx>,
 }
@@ -63,17 +65,17 @@ impl<'ctx> SymStructImpl<'ctx> {
     self.data._eq(&other.data)
   }
 
-  pub(super) fn get_raw(&self, idx: usize) -> VMResult<Dynamic<'ctx>> {
+  pub(super) fn get_raw(&self, idx: usize) -> PartialVMResult<Dynamic<'ctx>> {
     if idx > self.len() {
       return Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+        PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
           .with_message(format!("cannot access invalid value at index {}", idx))
       );
     }
     Ok(self.datatype.borrow().variants[0].accessors[idx].apply(&[&Dynamic::from_ast(&self.data)]))
   }
 
-  pub(super) fn set_raw(&mut self, idx: usize, val: Dynamic<'ctx>) -> VMResult<()>{
+  pub(super) fn set_raw(&mut self, idx: usize, val: Dynamic<'ctx>) -> PartialVMResult<()>{
     // TODO: find a better way to set, maybe try to improve z3.rs
     let len = self.len();
     let mut fields = Vec::with_capacity(len);
@@ -96,7 +98,7 @@ impl<'ctx> SymStructImpl<'ctx> {
 
   fn new(
     context: &'ctx Context,
-    struct_type: FatStructType,
+    struct_type: MoveStructLayout,
     datatype: DatatypeSort<'ctx>,
     fields: &[&Dynamic<'ctx>]
   ) -> Self {
@@ -112,18 +114,19 @@ impl<'ctx> SymStructImpl<'ctx> {
 
   pub(super) fn pack<I: IntoIterator<Item = SymValue<'ctx>>>(
     context: &'ctx Context,
-    struct_type: &FatStructType,
+    struct_type: &MoveStructLayout,
     values: I
-  ) -> VMResult<Self> {
+  ) -> PartialVMResult<Self> {
     let mut field_sorts: Vec<(String, Sort<'ctx>)> = vec![];
     for (idx, field) in struct_type.layout.iter().enumerate() {
       field_sorts.push((idx.to_string(), fat_type_to_sort(context, field)?));
     }
-    let field_sort_refs = field_sorts.iter().map(|(idx, field)| (idx.as_str(), field)).collect::<Vec<_>>();
-    let datatype = DatatypeBuilder::new(context)
-      .variant("Data", field_sort_refs.as_slice())
-      .finish(struct_type.struct_tag()?.to_string());
-    let fields: VMResult<Vec<_>> = values.into_iter().map(|v| v.as_ast()).collect();
+    let field_sort_refs = field_sorts.iter()
+      .map(|(idx, field)| (idx.as_str(), DatatypeAccessor::Sort(field))).collect::<Vec<_>>();
+    let datatype = DatatypeBuilder::new(context, struct_type.struct_tag()?.to_string())
+      .variant("Data", field_sort_refs)
+      .finish();
+    let fields: PartialVMResult<Vec<_>> = values.into_iter().map(|v| v.as_ast()).collect();
     let fields = fields?;
     let field_refs = fields.iter().collect::<Vec<_>>();
     Ok(Self::new(
@@ -134,13 +137,13 @@ impl<'ctx> SymStructImpl<'ctx> {
     ))
   }
 
-  fn get_internal(&self, idx: usize) -> VMResult<SymValue<'ctx>> {
+  fn get_internal(&self, idx: usize) -> PartialVMResult<SymValue<'ctx>> {
     let ast = self.get_raw(idx)?;
     let ty = &self.struct_type.layout[idx];
-    Ok(SymValue::from_ast_with_type_info(self.context, ast, ty)?)
+    Ok(SymValue::from_ast_with_type(self.context, ast, ty)?)
   }
 
-  pub(super) fn unpack(self) -> VMResult<Vec<SymValue<'ctx>>> {
+  pub(super) fn unpack(self) -> PartialVMResult<Vec<SymValue<'ctx>>> {
     let mut values = vec![];
     for idx in 0..self.struct_type.layout.len() {
       values.push(self.get_internal(idx)?);
@@ -148,15 +151,16 @@ impl<'ctx> SymStructImpl<'ctx> {
     Ok(values)
   }
 
-  pub(super) fn from_ast(context: &'ctx Context, struct_type: &FatStructType, ast: Datatype<'ctx>) -> VMResult<Self> {
+  pub(super) fn from_ast(context: &'ctx Context, struct_type: &MoveStructLayout, ast: Datatype<'ctx>) -> PartialVMResult<Self> {
     let mut field_sorts: Vec<(String, Sort<'ctx>)> = vec![];
     for (idx, field) in struct_type.layout.iter().enumerate() {
       field_sorts.push((idx.to_string(), fat_type_to_sort(context, field)?));
     }
-    let field_sort_refs = field_sorts.iter().map(|(idx, field)| (idx.as_str(), field)).collect::<Vec<_>>();
-    let datatype = DatatypeBuilder::new(context)
-      .variant("Data", field_sort_refs.as_slice())
-      .finish(struct_type.struct_tag()?.to_string());
+    let field_sort_refs = field_sorts.iter()
+      .map(|(idx, field)| (idx.as_str(), DatatypeAccessor::Sort(field))).collect::<Vec<_>>();
+    let datatype = DatatypeBuilder::new(context, struct_type.struct_tag()?.to_string())
+      .variant("Data", field_sort_refs)
+      .finish();
 
     Ok(Self {
       context,
@@ -166,19 +170,19 @@ impl<'ctx> SymStructImpl<'ctx> {
     })
   }
 
-  pub(super) fn get(&self, idx: &SymbolicContainerIndex<'ctx>) -> VMResult<SymValue<'ctx>> {
+  pub(super) fn get(&self, idx: &SymbolicContainerIndex<'ctx>) -> PartialVMResult<SymValue<'ctx>> {
     let idx = idx.to_concrete().ok_or(
-      VMStatus::new(StatusCode::INVALID_DATA)
+      PartialVMError::new(StatusCode::UNKNOWN_RUNTIME_STATUS)
         .with_message(format!("Symbolic index {:?} cannot be used on Struct", idx))
     )?;
     let ast = self.get_raw(idx)?;
     let ty = &self.struct_type.layout[idx];
-    Ok(SymValue::from_ast_with_type_info(self.context, ast, ty)?)
+    Ok(SymValue::from_ast_with_type(self.context, ast, ty)?)
   }
 
-  pub(super) fn set(&mut self, idx: &SymbolicContainerIndex<'ctx>, val: SymValue<'ctx>) -> VMResult<()> {
+  pub(super) fn set(&mut self, idx: &SymbolicContainerIndex<'ctx>, val: SymValue<'ctx>) -> PartialVMResult<()> {
     let idx = idx.to_concrete().ok_or(
-      VMStatus::new(StatusCode::INVALID_DATA)
+      PartialVMError::new(StatusCode::UNKNOWN_RUNTIME_STATUS)
         .with_message(format!("Symbolic index {:?} cannot be used on Struct", idx))
     )?;
     self.set_raw(idx, val.as_ast()?)?;
@@ -187,44 +191,49 @@ impl<'ctx> SymStructImpl<'ctx> {
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymStructImpl<'ctx> {
-  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+  fn as_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.data))
   }
 }
 
-pub(super) fn fat_type_to_sort<'ctx>(context: &'ctx Context, ty: &FatType) -> VMResult<Sort<'ctx>> {
+pub(super) fn fat_type_to_sort<'ctx>(context: &'ctx Context, ty: &MoveTypeLayout) -> PartialVMResult<Sort<'ctx>> {
   match ty {
-    FatType::Bool => Ok(Sort::bool(context)),
-    FatType::U8 => Ok(Sort::bitvector(context, 8)),
-    FatType::U64 => Ok(Sort::bitvector(context, 64)),
-    FatType::U128 => Ok(Sort::bitvector(context, 128)),
-    FatType::Address => Ok(Sort::bitvector(context, 128)),
-    FatType::Signer => Ok(Sort::bitvector(context, 128)),
-    FatType::Vector(v) => Ok(fat_type_vector_to_sort(context, v)?),
-    FatType::Struct(s) => Ok(fat_struct_type_to_sort(context, s)?),
-    _ => Err(VMStatus::new(StatusCode::TYPE_ERROR).with_message(format!("{:?} can not be made into a sort!", ty))),
+    MoveTypeLayout::Bool => Ok(Sort::bool(context)),
+    MoveTypeLayout::U8 => Ok(Sort::bitvector(context, 8)),
+    MoveTypeLayout::U64 => Ok(Sort::bitvector(context, 64)),
+    MoveTypeLayout::U128 => Ok(Sort::bitvector(context, 128)),
+    MoveTypeLayout::Address => Ok(Sort::bitvector(context, 128)),
+    MoveTypeLayout::Signer => Ok(Sort::bitvector(context, 128)),
+    MoveTypeLayout::Vector(v) => Ok(fat_type_vector_to_sort(context, v)?),
+    MoveTypeLayout::Struct(s) => Ok(fat_struct_type_to_sort(context, s)?),
+    _ => Err(PartialVMError::new(StatusCode::UNKNOWN_RUNTIME_STATUS).with_message(format!("{:?} can not be made into a sort!", ty))),
   }
 }
 
-pub(super) fn fat_type_vector_to_sort<'ctx>(context: &'ctx Context, ty: &FatType) -> VMResult<Sort<'ctx>> {
+pub(super) fn fat_type_vector_to_sort<'ctx>(context: &'ctx Context, ty: &MoveTypeLayout) -> PartialVMResult<Sort<'ctx>> {
   let element_sort = fat_type_to_sort(context, ty)?;
   let array_sort = Sort::array(context, &Sort::bitvector(context, 64), &element_sort);
-  let sort = DatatypeBuilder::new(context)
-    .variant("Vector", &[("array", &array_sort), ("length", &Sort::bitvector(context, 64))])
-    .finish(format!("Vector<{}>", ty.type_tag()?))
+  let sort = DatatypeBuilder::new(context, format!("Vector<{}>", ty.type_tag()?))
+    .variant("Vector",
+      vec![
+        ("array", DatatypeAccessor::Sort(&array_sort)),
+        ("length", DatatypeAccessor::Sort(&Sort::bitvector(context, 64))),
+      ])
+    .finish()
     .sort;
   Ok(sort)
 }
 
-pub(super) fn fat_struct_type_to_sort<'ctx>(context: &'ctx Context, ty: &FatStructType) -> VMResult<Sort<'ctx>> {
+pub(super) fn fat_struct_type_to_sort<'ctx>(context: &'ctx Context, ty: &MoveStructLayout) -> PartialVMResult<Sort<'ctx>> {
   let mut field_sorts: Vec<(String, Sort<'ctx>)> = vec![];
   for (idx, field) in ty.layout.iter().enumerate() {
     field_sorts.push((idx.to_string(), fat_type_to_sort(context, field)?));
   }
-  let field_sort_refs = field_sorts.iter().map(|(idx, field)| (idx.as_str(), field)).collect::<Vec<_>>();
-  let sort = DatatypeBuilder::new(context)
-    .variant("Data", field_sort_refs.as_slice())
-    .finish(ty.struct_tag()?.to_string())
+  let field_sort_refs = field_sorts.iter()
+    .map(|(idx, field)| (idx.as_str(), DatatypeAccessor::Sort(field))).collect::<Vec<_>>();
+  let sort = DatatypeBuilder::new(context, ty.struct_tag()?.to_string())
+    .variant("Data", field_sort_refs)
+    .finish()
     .sort;
   Ok(sort)
 }

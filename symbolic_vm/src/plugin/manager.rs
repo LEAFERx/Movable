@@ -36,7 +36,7 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
     &self,
     interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     instruction: &Bytecode
-  ) -> VMResult<()>{
+  ) -> PartialVMResult<()>{
     for plugin in self.plugins.iter() {
       plugin.on_before_execute_instrcution(interpreter, instruction)?;
     }
@@ -50,7 +50,7 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
     interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     func: &Function,
     ty_args: Vec<Type>,
-  ) -> VMResult<bool>{
+  ) -> PartialVMResult<bool>{
     let mut result = false;
     for plugin in self.plugins.iter() {
       result = result || plugin.on_before_call(vm_ctx, loader, interpreter, func, ty_args.clone())?;
@@ -58,7 +58,7 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
     Ok(result)
   }
 
-  pub(crate) fn before_execute(&self) -> VMResult<()> {
+  pub(crate) fn before_execute(&self) -> PartialVMResult<()> {
     for plugin in self.plugins.iter() {
       plugin.on_before_execute()?;
     }
@@ -69,7 +69,7 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
     &self,
     interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     return_values: &[SymValue<'ctx>],
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     for plugin in self.plugins.iter() {
       plugin.on_after_execute(interpreter, return_values)?;
     }

@@ -1,0 +1,88 @@
+module Test {
+  import 0x0.Vector;
+
+  struct A {
+    x: u64,
+  }
+
+  struct B {
+    a: Self.A,
+  }
+
+  struct V {
+    v: vector<u64>,
+  }
+
+  struct X {
+    v: vector<Self.A>,
+  }
+
+  public test_struct_write(t: u64): u64 {
+    let a: Self.A;
+    let b: Self.B;
+
+    a = A { x: move(t) };
+    b = B { a: move(a) };
+
+    if (*&(&(&b).a).x < 23) {
+      *(&mut (&mut (&mut b).a).x) = 0;
+    } else {
+      *(&mut (&mut (&mut b).a).x) = 1;
+    }
+
+    return *&(&(&b).a).x;
+  }
+
+  public test_vector_write(t: u64): u64 {
+    let v: vector<u64>;
+    let vv: Self.V;
+    let c: u64;
+    let d: u64;
+
+    v = Vector.empty<u64>();
+    Vector.push_back<u64>(&mut v, move(t));
+    vv = V { v: move(v) };
+    c = *Vector.borrow<u64>(&(&vv).v, 0);
+    d = move(c) + 1;
+    *Vector.borrow_mut<u64>(&mut (&mut vv).v, 0) = move(d);
+    if (*Vector.borrow<u64>(&(&vv).v, 0) > 5) {
+      return Vector.pop_back<u64>(&mut (&mut vv).v);
+    } else {
+      return 0;
+    }
+  }
+  
+  public test_mixed_write(t: u64): u64 {
+    let a: Self.A;
+    let v: vector<Self.A>;
+    let x: Self.X;
+
+    let u_ref: &mut u64;
+    let a_ref: &mut Self.A;
+    let v_ref: &mut vector<Self.A>;
+
+    if (copy(t) < 3) {
+      return 0;
+    }
+
+    if (copy(t) > 10) {
+      return 3;
+    }
+
+    a = A { x: move(t) };
+    v = Vector.empty<Self.A>();
+    Vector.push_back<Self.A>(&mut v, move(a));
+    x = X { v: move(v) };
+
+    v_ref = &mut (&mut x).v;
+    a_ref = Vector.borrow_mut<Self.A>(move(v_ref), 0);
+    u_ref = &mut move(a_ref).x;
+    *move(u_ref) = *copy(u_ref) + 4;
+  
+    if (*&(Vector.borrow<Self.A>(&(&x).v, 0)).x < 7) {
+      return 1;
+    } else {
+      return 2;
+    }
+  }
+}

@@ -1,10 +1,8 @@
 use vm::{
   errors::*,
 };
-use libra_types::{
-  account_address::AccountAddress,
-  vm_error::{StatusCode, VMStatus},
-};
+use diem_types::account_address::AccountAddress;
+use move_core_types::vm_status::StatusCode;
 use std::convert::TryInto;
 use z3::{
   ast::{Ast, BV, Dynamic},
@@ -18,27 +16,25 @@ use crate::types::values::{
 #[derive(Debug, Clone)]
 pub struct SymAccountAddress<'ctx> {
   ast: BV<'ctx>,
-  is_constant: bool,
 }
 
 impl<'ctx> SymAccountAddress<'ctx> {
   pub const LENGTH: usize = AccountAddress::LENGTH;
 
-  pub fn new(context: &'ctx Context, address: AccountAddress) -> Self {
+  pub fn new(z3_ctx: &'ctx Context, address: AccountAddress) -> Self {
     let value = u128::from_ne_bytes(address.into());
-    let ast = BV::from_u64(context, (value >> 64) as u64, 64)
-      .concat(&BV::from_u64(context, value as u64, 64));
+    let ast = BV::from_u64(z3_ctx, (value >> 64) as u64, 64)
+      .concat(&BV::from_u64(z3_ctx, value as u64, 64));
     Self {
       ast,
-      is_constant: true,
     }
   }
 
-  pub fn from_ast(ast: BV<'ctx>, is_constant: bool) -> Self {
-    Self { ast, is_constant }
+  pub fn from_ast(ast: BV<'ctx>) -> Self {
+    Self { ast }
   }
 
-  pub fn into_address(self) -> VMResult<AccountAddress> {
+  pub fn into_address(self) -> PartialVMResult<AccountAddress> {
     let high = self.ast.extract(127, 64).simplify();
     let low = self.ast.extract(63, 0).simplify();
     
@@ -49,26 +45,19 @@ impl<'ctx> SymAccountAddress<'ctx> {
         Ok(bytes.try_into().unwrap())
       },
       _ => Err(
-        VMStatus::new(StatusCode::INVALID_DATA)
+        PartialVMError::new(StatusCode::UNKNOWN_RUNTIME_STATUS)
           .with_message(format!("Cannot make symbolic address {:?} to concrete.", self))
       ),
     }
   }
 
-  pub fn equals(&self, other: &Self) -> VMResult<SymBool<'ctx>> {
-    let mut operand = vec![];
-    if !self.is_constant {
-      operand.push(Dynamic::from_ast(&self.ast));
-    }
-    if !other.is_constant {
-      operand.push(Dynamic::from_ast(&other.ast));
-    }
-    Ok(SymBool::from_ast(self.ast._eq(&other.ast), operand))
+  pub fn equals(&self, other: &Self) -> SymBool<'ctx> {
+    SymBool::from_ast(self.ast._eq(&other.ast))
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymAccountAddress<'ctx> {
-  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+  fn as_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.ast))
   }
 }

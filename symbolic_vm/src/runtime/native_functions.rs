@@ -1,12 +1,17 @@
 use crate::runtime::{interpreter::SymInterpreter, loader::Resolver};
-use libra_types::{
+use diem_types::{
   access_path::AccessPath, account_address::AccountAddress, account_config::CORE_CODE_ADDRESS,
   contract_event::ContractEvent,
 };
-use move_core_types::{/* gas_schedule::CostTable, */identifier::IdentStr, language_storage::ModuleId};
+use move_core_types::{
+  /* gas_schedule::CostTable, */
+  identifier::IdentStr,
+  language_storage::ModuleId,
+  value::MoveTypeLayout,
+};
 // use move_vm_natives::{account, event, hash, lcs, signature};
 use move_vm_types::{
-  loaded_data::{runtime_types::Type, types::FatType},
+  loaded_data::runtime_types::Type,
 };
 use crate::{
   state::vm_context::SymbolicVMContext,
@@ -72,7 +77,7 @@ impl NativeFunction {
       (&CORE_CODE_ADDRESS, "Vector", "destroy_empty") => VectorDestroyEmpty,
       (&CORE_CODE_ADDRESS, "Vector", "swap") => VectorSwap,
       (&CORE_CODE_ADDRESS, "Event", "write_to_event_store") => AccountWriteEvent,
-      (&CORE_CODE_ADDRESS, "LibraAccount", "save_account") => AccountSaveAccount,
+      (&CORE_CODE_ADDRESS, "DiemAccount", "save_account") => AccountSaveAccount,
       (&CORE_CODE_ADDRESS, "Debug", "print") => DebugPrint,
       (&CORE_CODE_ADDRESS, "Debug", "print_stack_trace") => DebugPrintStackTrace,
       _ => return None,
@@ -85,7 +90,7 @@ impl NativeFunction {
     ctx: &mut impl SymNativeContext<'ctx>,
     t: Vec<Type>,
     v: VecDeque<SymValue<'ctx>>,
-  ) -> VMResult<SymNativeResult<'ctx>> {
+  ) -> PartialVMResult<SymNativeResult<'ctx>> {
     match self {
       // Self::HashSha2_256 => hash::native_sha2_256(ctx, t, v),
       // Self::HashSha3_256 => hash::native_sha3_256(ctx, t, v),
@@ -141,7 +146,7 @@ impl<'a, 'vtxn, 'ctx> SymNativeContext<'ctx> for SymFunctionContext<'a, 'vtxn, '
     self.z3_ctx
   }
 
-  fn print_stack_trace<B: Write>(&self, _buf: &mut B) -> VMResult<()> {
+  fn print_stack_trace<B: Write>(&self, _buf: &mut B) -> PartialVMResult<()> {
     // self
     //   .interpreter
     //   .debug_print_stack_trace(buf, &self.resolver)
@@ -159,24 +164,24 @@ impl<'a, 'vtxn, 'ctx> SymNativeContext<'ctx> for SymFunctionContext<'a, 'vtxn, '
     struct_name: &IdentStr,
     resource_to_save: SymStruct<'ctx>,
     account_address: AccountAddress,
-  ) -> VMResult<()> {
-    let libra_type = self.resolver.get_libra_type_info(
+  ) -> PartialVMResult<()> {
+    let diem_type = self.resolver.get_diem_type_info(
       module_id,
       struct_name,
       ty_args,
       self.vm_ctx,
     )?;
-    let ap = AccessPath::new(account_address, libra_type.resource_key().to_vec());
+    let ap = AccessPath::new(account_address, diem_type.resource_key().to_vec());
     self
       .interpreter.state
-      .move_resource_to(self.vm_ctx, &ap, libra_type.fat_type(), resource_to_save)
+      .move_resource_to(self.vm_ctx, &ap, diem_type.fat_type(), resource_to_save)
   }
 
-  fn save_event(&mut self, event: ContractEvent) -> VMResult<()> {
+  fn save_event(&mut self, event: ContractEvent) -> PartialVMResult<()> {
     Ok(self.interpreter.state.push_event(event))
   }
 
-  fn convert_to_fat_types(&self, types: Vec<Type>) -> VMResult<Vec<FatType>> {
+  fn convert_to_fat_types(&self, types: Vec<Type>) -> PartialVMResult<Vec<MoveTypeLayout>> {
     types
       .iter()
       .map(|ty| self.resolver.type_to_fat_type(ty))

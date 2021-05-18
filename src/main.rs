@@ -1,4 +1,4 @@
-// use libra_types::{
+// use diem_types::{
 //   transaction::Module,
 // };
 use move_core_types::identifier::IdentStr;

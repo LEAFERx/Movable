@@ -1,12 +1,11 @@
-use bytecode_verifier::VerifiedModule;
-// use libra_logger::prelude::*;
-use libra_types::vm_error::{StatusCode, VMStatus};
+// use diem_logger::prelude::*;
 use move_core_types::{
   // gas_schedule::CostTable,
   identifier::IdentStr,
   language_storage::{ModuleId, TypeTag},
+  vm_status::{StatusCode, VMStatus},
 };
-use move_vm_types::{
+use diem_vm::{
   transaction_metadata::TransactionMetadata,
 };
 use crate::{
@@ -15,9 +14,9 @@ use crate::{
 };
 use vm::{
   access::ModuleAccess,
-  errors::{verification_error, vm_error, Location, VMResult},
-  file_format::Signature,
-  CompiledModule, IndexKind,
+  errors::{verification_error, Location, PartialVMResult, PartialVMError},
+  file_format::{Signature, CompiledModule},
+  IndexKind,
 };
 
 use std::{
@@ -52,7 +51,7 @@ impl<'ctx> VMRuntime<'ctx> {
     module: Vec<u8>,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
     txn_data: &TransactionMetadata,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     let compiled_module = match CompiledModule::deserialize(&module) {
       Ok(module) => module,
       Err(err) => {
@@ -76,13 +75,16 @@ impl<'ctx> VMRuntime<'ctx> {
     // under the transaction sender's account.
     let module_id = compiled_module.self_id();
     if vm_ctx.exists_module(&module_id) {
-      return Err(vm_error(
-        Location::default(),
-        StatusCode::DUPLICATE_MODULE_NAME,
-      ));
+      return Err(
+        // vm_error(
+        //   Location::default(),
+        //   StatusCode::DUPLICATE_MODULE_NAME,
+        // )
+        PartialVMError::new(StatusCode::DUPLICATE_MODULE_NAME).finish(Location::Undefined)
+      );
     };
 
-    let verified_module = VerifiedModule::new(compiled_module).map_err(|(_, e)| e)?;
+    let verified_module = CompiledModule::new(compiled_module).map_err(|(_, e)| e)?;
     Loader::check_natives(&verified_module)?;
     vm_ctx.publish_module(module_id, module)
   }
@@ -96,7 +98,7 @@ impl<'ctx> VMRuntime<'ctx> {
   //   script: Vec<u8>,
   //   ty_args: Vec<TypeTag>,
   //   args: Vec<SymValue<'ctx>>,
-  // ) -> VMResult<()> {
+  // ) -> PartialVMResult<()> {
   //   let mut type_params = vec![];
   //   for ty in &ty_args {
   //     type_params.push(self.loader.load_type(ty, vm_ctx)?);
@@ -131,7 +133,7 @@ impl<'ctx> VMRuntime<'ctx> {
     function_name: &IdentStr,
     ty_args: Vec<TypeTag>,
     args: Vec<SymValue<'ctx>>,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     let mut type_params = vec![];
     for ty in &ty_args {
       type_params.push(self.loader.load_type(ty, vm_ctx)?);
@@ -154,7 +156,7 @@ impl<'ctx> VMRuntime<'ctx> {
       &args,
     )?;
 
-    let args: VMResult<Vec<_>> = args.into_iter().map(|v| v.as_ast()).collect();
+    let args: PartialVMResult<Vec<_>> = args.into_iter().map(|v| v.as_ast()).collect();
     let args = args?;
 
     let mut interp_stack = vec![];
@@ -189,9 +191,9 @@ impl<'ctx> VMRuntime<'ctx> {
 
   pub fn cache_module(
     &self,
-    module: VerifiedModule,
+    module: CompiledModule,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     self.loader.cache_module(module, vm_ctx)
   }
 
@@ -200,16 +202,16 @@ impl<'ctx> VMRuntime<'ctx> {
     function_name: &IdentStr,
     module_id: &ModuleId,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
-  ) -> VMResult<Arc<Function>> {
+  ) -> PartialVMResult<Arc<Function>> {
     self.loader.load_function(function_name, module_id, vm_ctx)
   }
 }
 
 /// Verify if the transaction arguments match the type signature of the main function.
-fn _verify_args<'ctx>(signature: &Signature, args: &[SymValue<'ctx>]) -> VMResult<()> {
+fn _verify_args<'ctx>(signature: &Signature, args: &[SymValue<'ctx>]) -> PartialVMResult<()> {
   if signature.len() != args.len() {
     return Err(
-      VMStatus::new(StatusCode::TYPE_MISMATCH).with_message(format!(
+      PartialVMError::new(StatusCode::TYPE_MISMATCH).with_message(format!(
         "argument length mismatch: expected {} got {}",
         signature.len(),
         args.len()
@@ -219,7 +221,7 @@ fn _verify_args<'ctx>(signature: &Signature, args: &[SymValue<'ctx>]) -> VMResul
   for (tok, val) in signature.0.iter().zip(args) {
     if !val.is_valid_script_arg(tok) {
       return Err(
-        VMStatus::new(StatusCode::TYPE_MISMATCH).with_message("argument type mismatch".to_string()),
+        PartialVMError::new(StatusCode::TYPE_MISMATCH).with_message("argument type mismatch".to_string()),
       );
     }
   }

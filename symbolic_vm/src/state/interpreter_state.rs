@@ -1,14 +1,14 @@
-use libra_types::{
+use diem_types::{
   access_path::AccessPath,
   contract_event::ContractEvent,
-  vm_error::{sub_status, StatusCode, VMStatus},
   // write_set::WriteSet,
 };
-use libra_logger::prelude::*;
+use diem_logger::prelude::*;
 use move_core_types::{
   gas_schedule::{AbstractMemorySize, GasAlgebra, GasCarrier, GasUnits},
+  value::MoveStructLayout,
+  vm_status::{sub_status, StatusCode, VMStatus},
 };
-use move_vm_types::loaded_data::types::FatStructType;
 use crate::{
   types::{
     values::{SymGlobalValue, SymStruct, SymValue},
@@ -33,7 +33,7 @@ pub struct SymInterpreterState<'ctx> {
   /// List of events "fired" during the course of an execution.
   event_data: Vec<ContractEvent>,
 
-  data_map: BTreeMap<AccessPath, Option<(FatStructType, SymGlobalValue<'ctx>)>>,
+  data_map: BTreeMap<AccessPath, Option<(MoveStructLayout, SymGlobalValue<'ctx>)>>,
 
   // phantom: PhantomData<SymbolicVMContext<'_, 'ctx>>,
 }
@@ -56,7 +56,7 @@ impl<'ctx> SymInterpreterState<'ctx> {
   }
 
   // Gas
-  pub fn deduct_gas(&mut self, amount: GasUnits<GasCarrier>) -> VMResult<()> {
+  pub fn deduct_gas(&mut self, amount: GasUnits<GasCarrier>) -> PartialVMResult<()> {
     if self
       .gas_left
       .app(&amount, |curr_gas, gas_amt| curr_gas >= gas_amt)
@@ -66,7 +66,7 @@ impl<'ctx> SymInterpreterState<'ctx> {
     } else {
       // Zero out the internal gas state
       self.gas_left = GasUnits::new(0);
-      Err(VMStatus::new(StatusCode::OUT_OF_GAS))
+      Err(PartialVMError::new(StatusCode::OUT_OF_GAS))
     }
   }
   
@@ -78,8 +78,8 @@ impl<'ctx> SymInterpreterState<'ctx> {
   pub fn publish_resource(
     &mut self,
     ap: &AccessPath,
-    g: (FatStructType, SymGlobalValue<'ctx>),
-  ) -> VMResult<()> {
+    g: (MoveStructLayout, SymGlobalValue<'ctx>),
+  ) -> PartialVMResult<()> {
     self.data_map.insert(ap.clone(), Some(g));
     Ok(())
   }
@@ -94,8 +94,8 @@ impl<'ctx> SymInterpreterState<'ctx> {
     &mut self,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
     ap: &AccessPath,
-    ty: &FatStructType,
-  ) -> VMResult<&mut Option<(FatStructType, SymGlobalValue<'ctx>)>> {
+    ty: &MoveStructLayout,
+  ) -> PartialVMResult<&mut Option<(MoveStructLayout, SymGlobalValue<'ctx>)>> {
     if !self.data_map.contains_key(ap) {
       let context_data = vm_ctx
         .load_data(ap, ty)?
@@ -107,7 +107,7 @@ impl<'ctx> SymInterpreterState<'ctx> {
         }
         None => {
           return Err(
-            VMStatus::new(StatusCode::MISSING_DATA).with_message(format!(
+            PartialVMError::new(StatusCode::MISSING_DATA).with_message(format!(
               "Cannot find {:?}::{}::{} for Access Path: {:?}",
               &ty.address,
               &ty.module.as_str(),
@@ -125,8 +125,8 @@ impl<'ctx> SymInterpreterState<'ctx> {
     &mut self,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
     ap: &AccessPath,
-    ty: &FatStructType,
-  ) -> VMResult<Option<&SymGlobalValue<'ctx>>> {
+    ty: &MoveStructLayout,
+  ) -> PartialVMResult<Option<&SymGlobalValue<'ctx>>> {
     let map_entry = self.load_data(vm_ctx, ap, ty)?;
     Ok(map_entry.as_ref().map(|(_, g)| g))
   }
@@ -135,8 +135,8 @@ impl<'ctx> SymInterpreterState<'ctx> {
     &mut self,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
     ap: &AccessPath,
-    ty: &FatStructType,
-  ) -> VMResult<Option<SymGlobalValue<'ctx>>> {
+    ty: &MoveStructLayout,
+  ) -> PartialVMResult<Option<SymGlobalValue<'ctx>>> {
     let map_entry = self.load_data(vm_ctx, ap, ty)?;
     // .take() means that the entry is removed from the data map -- this marks the
     // access path for deletion.
@@ -147,9 +147,9 @@ impl<'ctx> SymInterpreterState<'ctx> {
     &mut self,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
     ap: &AccessPath,
-    ty: &FatStructType,
+    ty: &MoveStructLayout,
     resource: SymStruct<'ctx>,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     // a resource can be written to an AccessPath if the data does not exists or
     // it was deleted (MoveFrom)
     let can_write = match self.borrow_resource(vm_ctx, ap, ty) {
@@ -166,10 +166,13 @@ impl<'ctx> SymInterpreterState<'ctx> {
       self.publish_resource(ap, (ty.clone(), new_root))
     } else {
       warn!("[VM] Cannot write over existing resource {}", ap);
-      Err(vm_error(
-        Location::new(),
-        StatusCode::CANNOT_WRITE_EXISTING_RESOURCE,
-      ))
+      Err(
+        // vm_error(
+        //   Location::new(),
+        //   StatusCode::CANNOT_WRITE_EXISTING_RESOURCE,
+        // )
+        PartialVMError::new(StatusCode::DYNAMIC_REFERENCE_ERROR).finish(Location::Undefined)
+      )
     }
   }
 
@@ -177,8 +180,8 @@ impl<'ctx> SymInterpreterState<'ctx> {
     &mut self,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
     ap: &AccessPath,
-    ty: &FatStructType
-  ) -> VMResult<SymValue<'ctx>> {
+    ty: &MoveStructLayout
+  ) -> PartialVMResult<SymValue<'ctx>> {
     let root_value = match self.move_resource(vm_ctx, ap, ty) {
       Ok(g) => g,
       Err(e) => {
@@ -190,8 +193,9 @@ impl<'ctx> SymInterpreterState<'ctx> {
     match root_value {
       Some(global_val) => Ok(SymValue::from_sym_struct(global_val.into_owned_struct()?)),
       None => Err(
-        vm_error(Location::new(), StatusCode::DYNAMIC_REFERENCE_ERROR)
-          .with_sub_status(sub_status::DRE_GLOBAL_ALREADY_BORROWED),
+        // vm_error(Location::new(), StatusCode::DYNAMIC_REFERENCE_ERROR)
+        //   .with_sub_status(sub_status::DRE_GLOBAL_ALREADY_BORROWED),
+        PartialVMError::new(StatusCode::DYNAMIC_REFERENCE_ERROR).finish(Location::Undefined)
       ),
     }
   }
@@ -200,8 +204,8 @@ impl<'ctx> SymInterpreterState<'ctx> {
     &mut self,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
     ap: &AccessPath,
-    ty: &FatStructType,
-  ) -> VMResult<(bool, AbstractMemorySize<GasCarrier>)> {
+    ty: &MoveStructLayout,
+  ) -> PartialVMResult<(bool, AbstractMemorySize<GasCarrier>)> {
     Ok(match self.borrow_resource(vm_ctx, ap, ty) {
       Ok(Some(gref)) => (true, gref.size()),
       Ok(None) | Err(_) => (false, AbstractMemorySize::new(0)),
@@ -212,14 +216,15 @@ impl<'ctx> SymInterpreterState<'ctx> {
     &mut self,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
     ap: &AccessPath,
-    ty: &FatStructType
-  ) -> VMResult<&SymGlobalValue<'ctx>> {
+    ty: &MoveStructLayout
+  ) -> PartialVMResult<&SymGlobalValue<'ctx>> {
     match self.borrow_resource(vm_ctx, ap, ty) {
       Ok(Some(g)) => Ok(g),
       Ok(None) => Err(
-        // TODO: wrong status code?
-        vm_error(Location::new(), StatusCode::DYNAMIC_REFERENCE_ERROR)
-          .with_sub_status(sub_status::DRE_GLOBAL_ALREADY_BORROWED),
+        // // TODO: wrong status code?
+        // vm_error(Location::new(), StatusCode::DYNAMIC_REFERENCE_ERROR)
+        //   .with_sub_status(sub_status::DRE_GLOBAL_ALREADY_BORROWED),
+        PartialVMError::new(StatusCode::DYNAMIC_REFERENCE_ERROR).finish(Location::Undefined)
       ),
       Err(e) => {
         error!("[VM] (BorrowGlobal) Error reading data for {}: {:?}", ap, e);

@@ -1,21 +1,21 @@
 [package]
 name = "movable-engine"
-version = "0.0.0"
+version = "0.1.0"
 authors = ["LEAFERx <leaferx@outlook.com>"]
 license = "Apache-2.0"
 publish = false
 edition = "2018"
 
 [dependencies]
-move-core-types = { path = "../../libra/language/move-core/types" }
-move-vm-state = { path = "../../libra/language/move-vm/state" }
-move-vm-types = { path = "../../libra/language/move-vm/types" }
-language-e2e-tests = { path = "../../libra/language/e2e-tests" }
-vm = { path = "../../libra/language/vm" }
-libra-types = { path = "../../libra/types" }
+move-core-types = { path = "../../diem/language/move-core/types" }
+diem-vm = { path = "../../diem/language/diem-vm" }
+move-vm-types = { path = "../../diem/language/move-vm/types" }
+language-e2e-tests = { path = "../../diem/language/testing-infra/e2e-tests" }
+vm = { path = "../../diem/language/vm" }
+diem-types = { path = "../../diem/types" }
 
-z3 = "0.6"
+z3 = "0.10.0"
 # z3 = { path = "/root/z3.rs/z3" }
 serde = { version = "1.0.110", default-features = false }
 
-symbolic_vm = { path = "../symbolic_vm", package = "movable-symbolic-vm" }
+symbolic-vm = { path = "../symbolic_vm", package = "movable-symbolic-vm" }

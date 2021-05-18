@@ -1,20 +1,19 @@
 use crate::runtime::runtime::VMRuntime;
-use bytecode_verifier::VerifiedModule;
 use move_core_types::{
   // gas_schedule::CostTable,
   identifier::IdentStr,
   language_storage::{ModuleId, TypeTag},};
-use move_vm_types::{
+use diem_vm::{
   transaction_metadata::TransactionMetadata,
 };
 use crate::state::vm_context::SymbolicVMContext;
-// use libra_types::{
+// use diem_types::{
 //   vm_error::{StatusCode, VMStatus},
 // };
 use vm::{
   errors::VMResult,
   file_format::{
-    SignatureToken,
+    SignatureToken, CompiledModule,
   },
 };
 
@@ -26,14 +25,14 @@ use crate::{
 
 pub struct SymbolicVM<'ctx> {
   runtime: VMRuntime<'ctx>,
-  context: &'ctx Context,
+  z3_ctx: &'ctx Context,
 }
 
 impl<'ctx> SymbolicVM<'ctx> {
-  pub fn new(context: &'ctx Context) -> Self {
+  pub fn new(z3_ctx: &'ctx Context) -> Self {
     Self {
       runtime: VMRuntime::new(),
-      context,
+      z3_ctx,
     }
   }
 
@@ -47,7 +46,7 @@ impl<'ctx> SymbolicVM<'ctx> {
     plugin_manager: &mut PluginManager<'_, 'ctx>,
     // ty_args: Vec<TypeTag>,
     // args: Vec<SymValue<'ctx>>,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     let (ty_args, args) = construct_symbolic_args(module, function_name, self.context, &self.runtime, vm_ctx)?;
     self.runtime.execute_function(
       self.context,
@@ -70,7 +69,7 @@ impl<'ctx> SymbolicVM<'ctx> {
   //   txn_data: &'vtxn TransactionMetadata,
   //   ty_args: Vec<TypeTag>,
   //   args: Vec<SymValue<'ctx>>,
-  // ) -> VMResult<()> {
+  // ) -> PartialVMResult<()> {
   //   self
   //     .runtime
   //     .execute_script(self.context, vm_ctx, txn_data, gas_schedule, script, ty_args, args)
@@ -81,15 +80,15 @@ impl<'ctx> SymbolicVM<'ctx> {
     module: Vec<u8>,
     vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
     txn_data: &'vtxn TransactionMetadata,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     self.runtime.publish_module(module, vm_ctx, txn_data)
   }
 
   pub fn cache_module(
     &self,
-    module: VerifiedModule,
+    module: CompiledModule,
     vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     self.runtime.cache_module(module, vm_ctx)
   }
 }
@@ -107,7 +106,7 @@ fn construct_symbolic_args<'ctx>(
   z3_ctx: &'ctx Context,
   runtime: &VMRuntime<'ctx>,
   vm_ctx: &mut SymbolicVMContext<'_, 'ctx>,
-) -> VMResult<(Vec<TypeTag>, Vec<SymValue<'ctx>>)> {
+) -> PartialVMResult<(Vec<TypeTag>, Vec<SymValue<'ctx>>)> {
   let func = runtime.load_function(function_name, module, vm_ctx)?;
   let mut args = vec![];
   let prefix = "TestFuncArgs";

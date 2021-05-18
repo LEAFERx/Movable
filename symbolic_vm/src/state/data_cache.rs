@@ -1,34 +1,36 @@
-// use libra_logger::prelude::*;
-// use libra_state_view::StateView;
-use libra_types::{
+// use diem_logger::prelude::*;
+// use diem_state_view::StateView;
+use diem_types::{
   access_path::AccessPath,
   // on_chain_config::ConfigStorage,
-  vm_error::{StatusCode, VMStatus},
   // write_set::{WriteOp, WriteSet, WriteSetMut},
 };
-use move_core_types::language_storage::ModuleId;
+use move_core_types::{
+  language_storage::ModuleId,
+  value::MoveStructLayout,
+  vm_status::{StatusCode, VMStatus},
+};
 use move_vm_types::{
-  loaded_data::types::FatStructType,
   values::{Struct},
 };
 use crate::types::values::{SymGlobalValue, /* SymStruct, */ SymValue};
-use move_vm_state::data_cache::RemoteCache;
+use move_vm_runtime::data_cache::RemoteCache;
 use std::{collections::btree_map::BTreeMap, /* mem::replace */};
 use vm::errors::*;
 
 use z3::Context;
 
 pub struct SymbolicExecutionDataCache<'vtxn, 'ctx> {
-  context: &'ctx Context,
-  data_map: BTreeMap<AccessPath, Option<(FatStructType, SymGlobalValue<'ctx>)>>,
+  z3_ctx: &'ctx Context,
+  data_map: BTreeMap<AccessPath, Option<(MoveStructLayout, SymGlobalValue<'ctx>)>>,
   module_map: BTreeMap<ModuleId, Vec<u8>>,
   data_cache: &'vtxn dyn RemoteCache,
 }
 
 impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
-  pub fn new(context: &'ctx Context, data_cache: &'vtxn dyn RemoteCache) -> Self {
+  pub fn new(z3_ctx: &'ctx Context, data_cache: &'vtxn dyn RemoteCache) -> Self {
     SymbolicExecutionDataCache {
-      context,
+      z3_ctx,
       data_cache,
       data_map: BTreeMap::new(),
       module_map: BTreeMap::new(),
@@ -36,7 +38,7 @@ impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
   }
 
   pub fn get_context(&self) -> &'ctx Context {
-    self.context
+    self.z3_ctx
   }
 
   pub fn exists_module(&self, m: &ModuleId) -> bool {
@@ -46,14 +48,14 @@ impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
     }
   }
 
-  pub fn load_module(&self, module: &ModuleId) -> VMResult<Vec<u8>> {
+  pub fn load_module(&self, module: &ModuleId) -> PartialVMResult<Vec<u8>> {
     match self.module_map.get(module) {
       Some(bytes) => Ok(bytes.clone()),
       None => {
         let ap = AccessPath::from(module);
         self.data_cache.get(&ap).and_then(|data| {
           data.ok_or_else(|| {
-            VMStatus::new(StatusCode::LINKER_ERROR)
+            PartialVMError::new(StatusCode::LINKER_ERROR)
               .with_message(format!("Cannot find {:?} in data cache", module))
           })
         })
@@ -61,7 +63,7 @@ impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
     }
   }
 
-  pub fn publish_module(&mut self, m: ModuleId, bytes: Vec<u8>) -> VMResult<()> {
+  pub fn publish_module(&mut self, m: ModuleId, bytes: Vec<u8>) -> PartialVMResult<()> {
     self.module_map.insert(m, bytes);
     Ok(())
   }
@@ -69,8 +71,8 @@ impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
   pub fn publish_resource(
     &mut self,
     ap: &AccessPath,
-    g: (FatStructType, SymGlobalValue<'ctx>),
-  ) -> VMResult<()> {
+    g: (MoveStructLayout, SymGlobalValue<'ctx>),
+  ) -> PartialVMResult<()> {
     self.data_map.insert(ap.clone(), Some(g));
     Ok(())
   }
@@ -84,8 +86,8 @@ impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
   pub(crate) fn load_data(
     &mut self,
     ap: &AccessPath,
-    ty: &FatStructType,
-  ) -> VMResult<&mut Option<(FatStructType, SymGlobalValue<'ctx>)>> {
+    ty: &MoveStructLayout,
+  ) -> PartialVMResult<&mut Option<(MoveStructLayout, SymGlobalValue<'ctx>)>> {
     if !self.data_map.contains_key(ap) {
       match self.data_cache.get(ap)? {
         Some(bytes) => {
@@ -95,7 +97,7 @@ impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
         }
         None => {
           return Err(
-            VMStatus::new(StatusCode::MISSING_DATA).with_message(format!(
+            PartialVMError::new(StatusCode::MISSING_DATA).with_message(format!(
               "Cannot find {:?}::{}::{} for Access Path: {:?}",
               &ty.address,
               &ty.module.as_str(),
@@ -114,7 +116,7 @@ impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
   /// Consume the TransactionDataCache and must be called at the end of a transaction.
   /// This also ends up checking that reference count around global resources is correct
   /// at the end of the transactions (all ReleaseRef are properly called)
-  // pub fn make_write_set(&mut self) -> VMResult<WriteSet> {
+  // pub fn make_write_set(&mut self) -> PartialVMResult<WriteSet> {
   //   if self.data_map.len() + self.module_map.len() > usize::max_value() {
   //     return Err(vm_error(Location::new(), StatusCode::INVALID_DATA));
   //   }
@@ -175,7 +177,7 @@ impl<'vtxn, 'ctx> SymbolicExecutionDataCache<'vtxn, 'ctx> {
 impl<'vtxn, 'ctx> Clone for SymbolicExecutionDataCache<'vtxn, 'ctx> {
   fn clone(&self) -> Self {
     Self {
-      context: self.context,
+      z3_ctx: self.z3_ctx,
       data_map: self.data_map.iter().map(|(key, value)| {
         let cloned_key = key.clone();
         let cloned_value = match value {

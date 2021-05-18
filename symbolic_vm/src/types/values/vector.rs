@@ -1,5 +1,6 @@
-use libra_types::{
-  vm_error::{
+use move_core_types::{
+  value::MoveTypeLayout,
+  vm_status::{
     sub_status::NFE_VECTOR_ERROR_BASE,
     StatusCode,
     VMStatus,
@@ -7,10 +8,7 @@ use libra_types::{
 };
 use move_vm_types::{
   // gas_schedule::NativeCostIndex,
-  loaded_data::{
-    types::FatType,
-    runtime_types::Type,
-  },
+  loaded_data::runtime_types::Type,
   // natives::function::native_gas,
 };
 use std::{
@@ -26,6 +24,7 @@ use vm::{
 use z3::{
   ast::{Ast, Array, Bool, BV, Dynamic, Datatype},
   Context,
+  DatatypeAccessor,
   DatatypeSort,
   DatatypeBuilder,
   Sort,
@@ -44,7 +43,7 @@ use crate::types::{
 #[derive(Debug)]
 pub(super) struct SymVectorImpl<'ctx> {
   pub(super) context: &'ctx Context,
-  pub(super) element_type: FatType,
+  pub(super) element_type: MoveTypeLayout,
   pub(super) datatype: Rc<RefCell<DatatypeSort<'ctx>>>,
   pub(super) data: Datatype<'ctx>,
 }
@@ -87,41 +86,45 @@ impl<'ctx> SymVectorImpl<'ctx> {
   }
 
   pub(super) fn get_raw(&self, idx: &Dynamic<'ctx>) -> Dynamic<'ctx> {
-    // !!! how to check idx overflow?
+    // TODO: how to check idx overflow?
     let v = self.array();
     v.select(idx)
   }
 
   pub(super) fn set_raw(&mut self, idx: &Dynamic<'ctx>, val: &Dynamic<'ctx>) {
-    // !!! how to check idx overflow?
+    // TODO: how to check idx overflow?
     let v = self.array();
     let v = v.store(idx, val);
     self.set_array(&v.into());
   }
 
   pub(super) fn set_multiple_raw(&mut self, idx_val_pairs: &[(&Dynamic<'ctx>, &Dynamic<'ctx>)]) {
-    // !!! how to check idx overflow?
+    // TODO: how to check idx overflow?
     let mut v = self.array();
     for (idx, val) in idx_val_pairs {
-      v = v.store(idx, val);
+      v = v.store(*idx, *val);
     }
     self.set_array(&v.into());
   }
 
   pub(super) fn new(
     context: &'ctx Context,
-    element_type: &FatType,
+    element_type: &MoveTypeLayout,
     values: &[&Dynamic<'ctx>],
-  ) -> VMResult<Self> {
+  ) -> PartialVMResult<Self> {
     let range_sort = fat_type_to_sort(context, element_type)?;
     let array_sort = Sort::array(context, &Sort::bitvector(context, 64), &range_sort);
-    let vector_datatypesort = DatatypeBuilder::new(context)
-      .variant("Vector", &[("array", &array_sort), ("length", &Sort::bitvector(context, 64))])
-      .finish(format!("Vector<{}>", element_type.type_tag()?));
+    let vector_datatypesort = DatatypeBuilder::new(context, format!("Vector<{}>", element_type.type_tag()?))
+      .variant("Vector",
+        vec![
+          ("array", DatatypeAccessor::Sort(&array_sort)),
+          ("length", DatatypeAccessor::Sort(&Sort::bitvector(context, 64))),
+        ])
+      .finish();
 
     let array = Array::fresh_const(context, "vector", &Sort::bitvector(context, 64), &range_sort);
     for i in 0..values.len() {
-      array.store(&BV::from_u64(context, i as u64, 64).into(), &values[i]);
+      array.store(&BV::from_u64(context, i as u64, 64), values[i]);
     }
     let symbolic_len = BV::from_u64(context, values.len() as u64, 64);
     let data = vector_datatypesort
@@ -136,16 +139,21 @@ impl<'ctx> SymVectorImpl<'ctx> {
     })
   }
 
-  pub(super) fn empty(context: &'ctx Context, element_type: &FatType) -> VMResult<Self> {
+  pub(super) fn empty(context: &'ctx Context, element_type: &MoveTypeLayout) -> PartialVMResult<Self> {
     Self::new(context, element_type, &[])
   }
 
-  pub(super) fn from_ast(context: &'ctx Context, element_type: &FatType, ast: Datatype<'ctx>) -> VMResult<Self> {
+  pub(super) fn from_ast(context: &'ctx Context, element_type: &MoveTypeLayout, ast: Datatype<'ctx>) -> PartialVMResult<Self> {
     let range_sort = fat_type_to_sort(context, element_type)?;
     let array_sort = Sort::array(context, &Sort::bitvector(context, 64), &range_sort);
-    let vector_datatypesort = DatatypeBuilder::new(context)
-      .variant("Vector", &[("array", &array_sort), ("length", &Sort::bitvector(context, 64))])
-      .finish(format!("Vector<{}>", element_type.type_tag()?));
+    let vector_datatypesort = DatatypeBuilder::new(context, format!("Vector<{}>", element_type.type_tag()?))
+      .variant("Vector",
+        vec![
+          ("array", DatatypeAccessor::Sort(&array_sort)),
+          ("length", DatatypeAccessor::Sort(&Sort::bitvector(context, 64))),
+        ])
+      .finish();
+      
 
     Ok(Self {
       context,
@@ -168,11 +176,11 @@ impl<'ctx> SymVectorImpl<'ctx> {
     let updated_len = len.bvsub(&BV::from_u64(self.context, 1, 64)).simplify();
     self.set_symbolic_len(&Dynamic::from_ast(&updated_len));
     let v = self.array();
-    let res = v.select(&updated_len.into());
+    let res = v.select(&updated_len);
     res
   }
 
-  pub(super) fn get(&self, idx: &SymbolicContainerIndex<'ctx>) -> VMResult<SymValue<'ctx>> {
+  pub(super) fn get(&self, idx: &SymbolicContainerIndex<'ctx>) -> PartialVMResult<SymValue<'ctx>> {
     use SymbolicContainerIndex::*;
 
     let ast = match idx {
@@ -183,14 +191,14 @@ impl<'ctx> SymVectorImpl<'ctx> {
       Symbolic(idx) => self.get_raw(&idx.as_ast()?),
     };
     let ty = &self.element_type;
-    Ok(SymValue::from_ast_with_type_info(self.context, ast, ty)?)
+    Ok(SymValue::from_ast_with_type(self.context, ast, ty)?)
   }
 
   pub(super) fn set(
     &mut self,
     idx: &SymbolicContainerIndex<'ctx>,
     val: SymValue<'ctx>
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     use SymbolicContainerIndex::*;
 
     match idx {
@@ -203,7 +211,7 @@ impl<'ctx> SymVectorImpl<'ctx> {
     Ok(())
   }
 
-  pub(super) fn swap(&mut self, idx1: &SymU64<'ctx>, idx2: &SymU64<'ctx>) -> VMResult<()> {
+  pub(super) fn swap(&mut self, idx1: &SymU64<'ctx>, idx2: &SymU64<'ctx>) -> PartialVMResult<()> {
     let idx1 = idx1.as_ast()?;
     let idx2 = idx2.as_ast()?;
     let ast1 = self.get_raw(&idx1);
@@ -214,7 +222,7 @@ impl<'ctx> SymVectorImpl<'ctx> {
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymVectorImpl<'ctx> {
-  fn as_ast(&self) -> VMResult<Dynamic<'ctx>> {
+  fn as_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.data))
   }
 }
@@ -243,7 +251,7 @@ macro_rules! pop_arg_front {
   };
 }
 
-fn check_elem_layout<'ctx>(ty: &Type, v: &SymContainer<'ctx>) -> VMResult<()> {
+fn check_elem_layout<'ctx>(ty: &Type, v: &SymContainer<'ctx>) -> PartialVMResult<()> {
   match (ty, &v) {
     (Type::U8, SymContainer::VecU8(_))
     | (Type::U64, SymContainer::VecU64(_))
@@ -256,7 +264,7 @@ fn check_elem_layout<'ctx>(ty: &Type, v: &SymContainer<'ctx>) -> VMResult<()> {
     (Type::StructInstantiation(_, _), SymContainer::Vector(_)) => Ok(()),
 
     (Type::Reference(_), _) | (Type::MutableReference(_), _) | (Type::TyParam(_), _) => Err(
-      VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+      PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
         .with_message(format!("invalid type param for vector: {:?}", ty)),
     ),
 
@@ -269,7 +277,7 @@ fn check_elem_layout<'ctx>(ty: &Type, v: &SymContainer<'ctx>) -> VMResult<()> {
     | (Type::Vector(_), _)
     | (Type::Struct(_), _)
     | (Type::StructInstantiation(_, _), _) => Err(
-      VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(format!(
+      PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(format!(
         "vector elem layout mismatch, expected {:?}, got {:?}",
         ty, v
       )),
@@ -281,7 +289,7 @@ pub fn native_empty<'ctx>(
   context: &impl SymNativeContext<'ctx>,
   ty_args: Vec<Type>,
   args: VecDeque<SymValue<'ctx>>,
-) -> VMResult<SymNativeResult<'ctx>> {
+) -> PartialVMResult<SymNativeResult<'ctx>> {
   debug_assert!(ty_args.len() == 1);
   debug_assert!(args.is_empty());
 
@@ -292,19 +300,19 @@ pub fn native_empty<'ctx>(
   let ty_args = context.convert_to_fat_types(ty_args)?;
 
   let container = match &ty_args[0] {
-    ty @ FatType::U8 => SymContainer::VecU8(SymVectorImpl::empty(z3_ctx, ty)?),
-    ty @ FatType::U64 => SymContainer::VecU64(SymVectorImpl::empty(z3_ctx, ty)?),
-    ty @ FatType::U128 => SymContainer::VecU128(SymVectorImpl::empty(z3_ctx, ty)?),
-    ty @ FatType::Bool => SymContainer::VecBool(SymVectorImpl::empty(z3_ctx, ty)?),
+    ty @ MoveTypeLayout::U8 => SymContainer::VecU8(SymVectorImpl::empty(z3_ctx, ty)?),
+    ty @ MoveTypeLayout::U64 => SymContainer::VecU64(SymVectorImpl::empty(z3_ctx, ty)?),
+    ty @ MoveTypeLayout::U128 => SymContainer::VecU128(SymVectorImpl::empty(z3_ctx, ty)?),
+    ty @ MoveTypeLayout::Bool => SymContainer::VecBool(SymVectorImpl::empty(z3_ctx, ty)?),
 
-    ty @ FatType::Address
-    | ty @ FatType::Signer
-    | ty @ FatType::Vector(_)
-    | ty @ FatType::Struct(_) => SymContainer::Vector(SymVectorImpl::empty(z3_ctx, ty)?),
+    ty @ MoveTypeLayout::Address
+    | ty @ MoveTypeLayout::Signer
+    | ty @ MoveTypeLayout::Vector(_)
+    | ty @ MoveTypeLayout::Struct(_) => SymContainer::Vector(SymVectorImpl::empty(z3_ctx, ty)?),
 
-    FatType::Reference(_) | FatType::MutableReference(_) | FatType::TyParam(_) => {
+    MoveTypeLayout::Reference(_) | MoveTypeLayout::MutableReference(_) | MoveTypeLayout::TyParam(_) => {
       return Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+        PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
           .with_message(format!("invalid type param for vector: {:?}", &ty_args[0])),
       )
     }
@@ -320,7 +328,7 @@ pub fn native_length<'ctx>(
   _context: &impl SymNativeContext<'ctx>,
   ty_args: Vec<Type>,
   mut args: VecDeque<SymValue<'ctx>>,
-) -> VMResult<SymNativeResult<'ctx>> {
+) -> PartialVMResult<SymNativeResult<'ctx>> {
   debug_assert!(ty_args.len() == 1);
   debug_assert!(args.len() == 1);
 
@@ -337,7 +345,7 @@ pub fn native_length<'ctx>(
     SymContainer::VecBool(v) => Ok(v.symbolic_len()),
     SymContainer::Vector(v) => Ok(v.symbolic_len()),
     _ => Err(
-      VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+      PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
         .with_message("native_length on a non-vector container".to_string())
     ),
   }?;
@@ -354,7 +362,7 @@ pub fn native_push_back<'ctx>(
   _context: &impl SymNativeContext<'ctx>,
   ty_args: Vec<Type>,
   mut args: VecDeque<SymValue<'ctx>>,
-) -> VMResult<SymNativeResult<'ctx>> {
+) -> PartialVMResult<SymNativeResult<'ctx>> {
   debug_assert!(ty_args.len() == 1);
   debug_assert!(args.len() == 2);
 
@@ -377,7 +385,7 @@ pub fn native_push_back<'ctx>(
     | SymContainer::Vector(v) => v.push(&e.as_ast()?),
     _ => {
       return Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+        PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
           .with_message("native_push_back on a non-vector container".to_string())
       );
     },
@@ -390,7 +398,7 @@ pub fn native_borrow<'ctx>(
   _context: &impl SymNativeContext<'ctx>,
   ty_args: Vec<Type>,
   mut args: VecDeque<SymValue<'ctx>>,
-) -> VMResult<SymNativeResult<'ctx>> {
+) -> PartialVMResult<SymNativeResult<'ctx>> {
   debug_assert!(ty_args.len() == 1);
   debug_assert!(args.len() == 2);
 
@@ -405,7 +413,7 @@ pub fn native_borrow<'ctx>(
   // if idx >= v.len() {
   //   return Ok(SymNativeResult::err(
   //     /* cost, */
-  //     VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
+  //     PartialVMError::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
   //   ));
   // }
   let v = SymValue(r.borrow_elem(SymbolicContainerIndex::Symbolic(idx))?);
@@ -417,7 +425,7 @@ pub fn native_pop<'ctx>(
   context: &impl SymNativeContext<'ctx>,
   ty_args: Vec<Type>,
   mut args: VecDeque<SymValue<'ctx>>,
-) -> VMResult<SymNativeResult<'ctx>> {
+) -> PartialVMResult<SymNativeResult<'ctx>> {
   debug_assert!(ty_args.len() == 1);
   debug_assert!(args.len() == 1);
 
@@ -433,7 +441,7 @@ pub fn native_pop<'ctx>(
   //   () => {
   //     return Ok(SymNativeResult::err(
   //       // cost,
-  //       VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(POP_EMPTY_VEC),
+  //       PartialVMError::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(POP_EMPTY_VEC),
   //     ));
   //   };
   // }
@@ -462,7 +470,7 @@ pub fn native_pop<'ctx>(
   //   },
   //   _ => {
   //     return Err(
-  //       VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+  //       PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
   //         .with_message("native_length on a non-vector container".to_string())
   //     );
   //   },
@@ -473,14 +481,14 @@ pub fn native_pop<'ctx>(
     | SymContainer::VecU64(v)
     | SymContainer::VecU128(v)
     | SymContainer::VecBool(v)
-    | SymContainer::Vector(v) => SymValue::from_ast_with_type_info(
+    | SymContainer::Vector(v) => SymValue::from_ast_with_type(
       context.get_z3_ctx(),
       v.pop(),
       &v.element_type
     )?,
     _ => {
       return Err(
-        VMStatus::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+        PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
           .with_message("native_length on a non-vector container".to_string())
       );
     },
@@ -494,7 +502,7 @@ pub fn native_destroy_empty<'ctx>(
   _context: &impl SymNativeContext<'ctx>,
   ty_args: Vec<Type>,
   mut args: VecDeque<SymValue<'ctx>>,
-) -> VMResult<SymNativeResult<'ctx>> {
+) -> PartialVMResult<SymNativeResult<'ctx>> {
   debug_assert!(ty_args.len() == 1);
   debug_assert!(args.len() == 1);
   let v = args.pop_front().unwrap().value_as::<SymContainer>()?;
@@ -517,7 +525,7 @@ pub fn native_destroy_empty<'ctx>(
   // } else {
   //   Ok(SymNativeResult::err(
   //     // cost,
-  //     VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(DESTROY_NON_EMPTY_VEC),
+  //     PartialVMError::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(DESTROY_NON_EMPTY_VEC),
   //   ))
   // }
   Ok(SymNativeResult::ok(vec![]))
@@ -527,7 +535,7 @@ pub fn native_swap<'ctx>(
   _context: &impl SymNativeContext<'ctx>,
   ty_args: Vec<Type>,
   mut args: VecDeque<SymValue<'ctx>>,
-) -> VMResult<SymNativeResult<'ctx>> {
+) -> PartialVMResult<SymNativeResult<'ctx>> {
   debug_assert!(ty_args.len() == 1);
   debug_assert!(args.len() == 3);
   let r = pop_arg_front!(args, SymContainerRef);
@@ -545,7 +553,7 @@ pub fn native_swap<'ctx>(
   //     if idx1 >= $v.len() || idx2 >= $v.len() {
   //       return Ok(SymNativeResult::err(
   //         /* cost, */
-  //         VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
+  //         PartialVMError::new(StatusCode::NATIVE_FUNCTION_ERROR).with_sub_status(INDEX_OUT_OF_BOUNDS),
   //       ));
   //     }
   //     $v.swap(idx1, idx2);
@@ -560,7 +568,7 @@ pub fn native_swap<'ctx>(
     | SymContainer::Vector(v) => v.swap(&idx1, &idx2)?,
     _ => {
       return Ok(SymNativeResult::err(
-        VMStatus::new(StatusCode::NATIVE_FUNCTION_ERROR)
+        PartialVMError::new(StatusCode::NATIVE_FUNCTION_ERROR)
           .with_message(format!("Cannot call native_swap on non-vector container {:?}", v))
       ));
     }

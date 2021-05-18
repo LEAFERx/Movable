@@ -1,4 +1,4 @@
-use libra_types::account_address::AccountAddress;
+use diem_types::account_address::AccountAddress;
 
 use language_e2e_tests::data_store::{FakeDataStore, GENESIS_CHANGE_SET};
 use move_core_types::{
@@ -6,7 +6,7 @@ use move_core_types::{
   identifier::{IdentStr, Identifier},
   language_storage::ModuleId,
 };
-use move_vm_state::{data_cache::BlockDataCache};
+use diem_vm::data_cache::StateViewCache;
 use move_vm_types::transaction_metadata::TransactionMetadata;
 use vm::CompiledModule;
 
@@ -76,8 +76,8 @@ impl Engine {
     let abs_spec_wrong = Specification::new(
       |_a: &[SymValue]| SymBool::from(z3_ctx, true),
       |_a: &[SymValue], r: &[SymValue]| {
-        // !!! bad type conversions and clones
-        // !!! figure it out
+        // TODO: bad type conversions and clones
+        // TODO: figure it out
         let ret = VMSymValueCast::<SymU64>::cast(r[0].copy_value()).unwrap();
         SymBool::from_ast(
           ret.as_inner().bvuge(&BV::from_u64(z3_ctx, 10, 64)),
@@ -89,8 +89,8 @@ impl Engine {
     let abs_spec_right = Specification::new(
       |_a: &[SymValue]| SymBool::from(z3_ctx, true),
       |a: &[SymValue], r: &[SymValue]| {
-        // !!! bad type conversions and clones
-        // !!! figure it out
+        // TODO: bad type conversions and clones
+        // TODO: figure it out
         let arg = VMSymValueCast::<SymU64>::cast(a[0].copy_value()).unwrap();
         let ret = VMSymValueCast::<SymU64>::cast(r[0].copy_value()).unwrap();
         let const_ten = BV::from_u64(z3_ctx, 10, 64);
@@ -99,7 +99,7 @@ impl Engine {
         let cond_pos = arg_ast.bvuge(&const_ten).implies(&ret_ast._eq(&arg_ast));
         let cond_neg = arg_ast.bvult(&const_ten).implies(&ret_ast._eq(&const_ten.bvsub(&arg_ast)));
         let cond = Bool::and(z3_ctx, &[&cond_pos, &cond_neg]);
-        SymBool::from_ast(cond, vec![Dynamic::from_ast(arg_ast), Dynamic::from_ast(ret_ast)]) // !!! Should not be vec![]
+        SymBool::from_ast(cond, vec![Dynamic::from_ast(arg_ast), Dynamic::from_ast(ret_ast)]) // TODO: Should not be vec![]
       },
       |_a: &[SymValue]| SymBool::from(z3_ctx, true)
     );

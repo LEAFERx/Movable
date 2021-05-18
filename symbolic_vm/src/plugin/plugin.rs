@@ -21,7 +21,7 @@ pub trait Plugin<'ctx> {
     &self,
     _interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     _instruction: &Bytecode
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     Ok(())
   }
 
@@ -32,11 +32,11 @@ pub trait Plugin<'ctx> {
     _interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     _func: &Function,
     _ty_args: Vec<Type>,
-  ) -> VMResult<bool> {
+  ) -> PartialVMResult<bool> {
     Ok(false)
   }
 
-  fn on_before_execute<'vtxn>(&self) -> VMResult<()> {
+  fn on_before_execute<'vtxn>(&self) -> PartialVMResult<()> {
     Ok(())
   }
 
@@ -44,7 +44,7 @@ pub trait Plugin<'ctx> {
     &self,
     _interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
     _return_values: &[SymValue<'ctx>],
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     Ok(())
   }
 }

@@ -3,7 +3,7 @@ use crate::{
   runtime::interpreter::SymInterpreter,
   runtime::loader::{Function, Loader, Resolver},
 };
-use libra_types::vm_error::{sub_status, VMStatus};
+use diem_types::vm_error::{sub_status, VMStatus};
 use nix::unistd::{fork, ForkResult};
 use z3::Solver;
 use std::{clone::Clone, marker::PhantomData, process::exit, sync::Arc};
@@ -74,7 +74,7 @@ impl<'ctx> ExecutionPlugin<'ctx> {
     solver: &'ctx Solver,
     interpreter: &mut SymInterpreter<'_, 'ctx>,
     context: &mut dyn SymbolicVMContext<'ctx>,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     Ok(())
   }
 }
@@ -118,7 +118,7 @@ impl<'ctx> SingleInstrPlugin<'ctx> {
     second_value: &mut Int,
     size_of_int: u32,
     sign_or_not: bool,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     let mut msg = String::from("\n------------PluginAddHook------------\n");
     let x = BV::from_int(&first_value, size_of_int);
     let y = BV::from_int(&second_value, size_of_int);
@@ -150,7 +150,7 @@ impl<'ctx> SingleInstrPlugin<'ctx> {
     first_value: &mut Int,
     second_value: &mut Int,
     size_of_int: u32,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     let mut msg = String::from("\n------------PluginAddHook------------\n");
     let x = BV::from_int(&first_value, size_of_int);
     let y = BV::from_int(&second_value, size_of_int);
@@ -183,7 +183,7 @@ impl<'ctx> SingleInstrPlugin<'ctx> {
     first_value: &mut Int,
     second_value: &mut Int,
     size_of_int: u32,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     let mut msg = String::from("\n------------PluginAddHook------------\n");
     let x = BV::from_int(&first_value, size_of_int);
     let y = BV::from_int(&second_value, size_of_int);
@@ -217,7 +217,7 @@ impl<'ctx> SingleInstrPlugin<'ctx> {
     second_value: &mut Int,
     size_of_int: u32,
     sign_or_not: bool,
-  ) -> VMResult<()> {
+  ) -> PartialVMResult<()> {
     let mut msg = String::from("\n------------PluginAddHook------------\n");
     let x = BV::from_int(&first_value, size_of_int);
     let y = BV::from_int(&second_value, size_of_int);
