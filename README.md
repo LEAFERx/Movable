@@ -1,17 +1,17 @@
 # Movable
 
-A symbolic execution tool for [Move](https://github.com/libra/libra/tree/master/language), which is a smart contract language designed for [Libra](https://libra.org).
+A symbolic execution tool for [Move](https://github.com/libra/libra/tree/master/language), which is a smart contract language designed for [Diem](https://diem.com).
 
-## Libra Setup
+## Diem Setup
 
-Clone [Libra](https://github.com/libra/libra) to the parent directory of Movable. The directory structure should look like:
+Clone [Diem](https://github.com/diem/diem) to the parent directory of Movable. The directory structure should look like:
 
 ```
-|_ libra
+|_ diem
 |_ Movable
 ```
 
-Libra repository should be checkout to 4ed956c16f61dac52f40d413266d1ffd6fbb9b50. Other versions are untested.
+Diem repository should be checkout to tag `diem-framework-v1.2.0`. Other versions are untested.
 
 ## Usage
 

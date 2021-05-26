@@ -1141,6 +1141,10 @@ impl<'a> Resolver<'a> {
     self.loader.type_to_type_layout(ty)
   }
 
+  pub(crate) fn type_to_type_tag(&self, ty: &Type) -> PartialVMResult<TypeTag> {
+    self.loader().type_to_type_tag(ty)
+  }
+
   pub(crate) fn loader(&self) -> &Loader {
     &self.loader
   }
@@ -1620,6 +1624,10 @@ impl Function {
     self.parameters.len()
   }
 
+  pub(crate) fn return_count(&self) -> usize {
+    self.return_.len()
+  }
+
   pub(crate) fn name(&self) -> &str {
     self.name.as_str()
   }
@@ -1635,6 +1643,10 @@ impl Function {
   #[allow(dead_code)]
   pub(crate) fn parameters(&self) -> &Signature {
     &self.parameters
+  }
+
+  pub(crate) fn returns(&self) -> &Signature {
+    &self.return_
   }
 
   pub(crate) fn pretty_string(&self) -> String {

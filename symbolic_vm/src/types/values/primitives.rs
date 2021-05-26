@@ -4,7 +4,7 @@ use vm::{
 
 use z3::{
   ast::{Ast, Bool, Dynamic, BV},
-  z3_ctx,
+  Context,
 };
 
 use std::fmt;
@@ -34,7 +34,7 @@ pub struct SymBool<'ctx> {
 // Consider to use a macro to do impl
 
 impl<'ctx> SymU8<'ctx> {
-  pub fn from(z3_ctx: &'ctx z3_ctx, value: u8) -> Self {
+  pub fn from(z3_ctx: &'ctx Context, value: u8) -> Self {
     SymU8 {
       ast: BV::from_u64(z3_ctx, value as u64, 8),
     }
@@ -46,7 +46,7 @@ impl<'ctx> SymU8<'ctx> {
     SymU8 { ast }
   }
 
-  pub fn new(z3_ctx: &'ctx z3_ctx, prefix: &str) -> Self {
+  pub fn new(z3_ctx: &'ctx Context, prefix: &str) -> Self {
     SymU8 {
       ast: BV::fresh_const(z3_ctx, prefix, 8),
     }
@@ -156,7 +156,7 @@ impl<'ctx> SymU8<'ctx> {
 }
 
 impl<'ctx> SymU64<'ctx> {
-  pub fn from(z3_ctx: &'ctx z3_ctx, value: u64) -> Self {
+  pub fn from(z3_ctx: &'ctx Context, value: u64) -> Self {
     SymU64 {
       ast: BV::from_u64(z3_ctx, value, 64),
     }
@@ -168,7 +168,7 @@ impl<'ctx> SymU64<'ctx> {
     SymU64 { ast }
   }
 
-  pub fn new(z3_ctx: &'ctx z3_ctx, prefix: &str) -> Self {
+  pub fn new(z3_ctx: &'ctx Context, prefix: &str) -> Self {
     SymU64 {
       ast: BV::fresh_const(z3_ctx, prefix, 64),
     }
@@ -278,7 +278,7 @@ impl<'ctx> SymU64<'ctx> {
 }
 
 impl<'ctx> SymU128<'ctx> {
-  pub fn from(z3_ctx: &'ctx z3_ctx, value: u128) -> Self {
+  pub fn from(z3_ctx: &'ctx Context, value: u128) -> Self {
     let ctx = z3_ctx;
     let ast =
       BV::from_u64(ctx, (value >> 64) as u64, 64).concat(&BV::from_u64(ctx, value as u64, 64));
@@ -291,7 +291,7 @@ impl<'ctx> SymU128<'ctx> {
     SymU128 { ast }
   }
 
-  pub fn new(z3_ctx: &'ctx z3_ctx, prefix: &str) -> Self {
+  pub fn new(z3_ctx: &'ctx Context, prefix: &str) -> Self {
     SymU128 {
       ast: BV::fresh_const(z3_ctx, prefix, 128),
     }
@@ -401,7 +401,7 @@ impl<'ctx> SymU128<'ctx> {
 }
 
 impl<'ctx> SymBool<'ctx> {
-  pub fn from(z3_ctx: &'ctx z3_ctx, value: bool) -> Self {
+  pub fn from(z3_ctx: &'ctx Context, value: bool) -> Self {
     SymBool {
       ast: Bool::from_bool(z3_ctx, value),
     }
@@ -411,7 +411,7 @@ impl<'ctx> SymBool<'ctx> {
     SymBool { ast }
   }
 
-  pub fn new(z3_ctx: &'ctx z3_ctx, prefix: &str) -> Self {
+  pub fn new(z3_ctx: &'ctx Context, prefix: &str) -> Self {
     SymBool {
       ast: Bool::fresh_const(z3_ctx, prefix),
     }
@@ -433,13 +433,13 @@ impl<'ctx> SymBool<'ctx> {
     }
   }
 
-  pub fn and(z3_ctx: &'ctx z3_ctx, asts: &[SymBool<'ctx>]) -> SymBool<'ctx> {
+  pub fn and(z3_ctx: &'ctx Context, asts: &[SymBool<'ctx>]) -> SymBool<'ctx> {
     SymBool {
       ast: Bool::and(z3_ctx, &asts.iter().map(|v| &v.ast).collect::<Vec<_>>()),
     }
   }
 
-  pub fn or(z3_ctx: &'ctx z3_ctx, asts: &[SymBool<'ctx>]) -> SymBool<'ctx> {
+  pub fn or(z3_ctx: &'ctx Context, asts: &[SymBool<'ctx>]) -> SymBool<'ctx> {
     SymBool {
       ast: Bool::or(z3_ctx, &asts.iter().map(|v| &v.ast).collect::<Vec<_>>()),
     }

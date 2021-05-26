@@ -13,15 +13,10 @@
 //! This module contains the declarations and utilities to implement a native
 //! function.
 
-use diem_types::{
-  account_address::AccountAddress, contract_event::ContractEvent
-};
 use move_core_types::{
-  gas_schedule::{AbstractMemorySize, CostTable, GasAlgebra, GasCarrier, GasUnits},
-  identifier::IdentStr,
-  language_storage::ModuleId,
+  gas_schedule::{AbstractMemorySize, CostTable, GasAlgebra, GasCarrier, InternalGasUnits},
+  language_storage::TypeTag,
   value::MoveTypeLayout,
-  vm_status::VMStatus,
 };
 use move_vm_types::{
   gas_schedule::NativeCostIndex,
@@ -30,10 +25,10 @@ use move_vm_types::{
 use std::fmt::Write;
 use vm::errors::PartialVMResult;
 
-use crate::types::values::{SymStruct, SymValue};
+use crate::types::values::SymValue;
 use z3::Context;
 
-/// `SymNativeContext` - Symbolic native function context.
+/// `SymNativeContext` - Symbolic Native function context.
 ///
 /// This is the API, the "privileges", a native function is given.
 /// Normally a native function will only need the `CostTable`.
@@ -46,19 +41,18 @@ pub trait SymNativeContext<'ctx> {
   fn print_stack_trace<B: Write>(&self, buf: &mut B) -> PartialVMResult<()>;
   /// Gets cost table ref.
   // fn cost_table(&self) -> &CostTable;
-  // Save a resource under the address specified by `account_address`
-  fn save_under_address(
-    &mut self,
-    ty_args: &[Type],
-    module_id: &ModuleId,
-    struct_name: &IdentStr,
-    resource_to_save: SymStruct<'ctx>,
-    account_address: AccountAddress,
-  ) -> PartialVMResult<()>;
-  /// Saves contract event.
-  fn save_event(&mut self, event: ContractEvent) -> PartialVMResult<()>;
-  /// Converts types to fet types.
-  fn convert_to_fat_types(&self, types: Vec<Type>) -> PartialVMResult<Vec<MoveTypeLayout>>;
+  /// Saves contract event. Returns true if successful
+    fn save_event(
+      &mut self,
+      guid: Vec<u8>,
+      count: u64,
+      ty: Type,
+      val: SymValue<'ctx>,
+  ) -> PartialVMResult<bool>;
+  /// Get the a type tag via the type.
+  fn type_to_type_tag(&self, ty: &Type) -> PartialVMResult<Option<TypeTag>>;
+  /// Get the a data layout via the type.
+  fn type_to_type_layout(&self, ty: &Type) -> PartialVMResult<Option<MoveTypeLayout>>;
 }
 
 /// Result of a symbolic native function execution requires charges for execution cost.
@@ -72,35 +66,40 @@ pub trait SymNativeContext<'ctx> {
 /// must be expressed in a `NativeResult` with a cost and a VMStatus.
 pub struct SymNativeResult<'ctx> {
   /// The cost for running that function, whether successfully or not.
-  // pub cost: GasUnits<GasCarrier>,
+  pub cost: InternalGasUnits<GasCarrier>,
   /// Result of execution. This is either the return values or the error to report.
-  pub result: PartialVMResult<Vec<SymValue<'ctx>>>,
+  pub result: Result<Vec<SymValue<'ctx>>, u64>,
 }
 
 impl<'ctx> SymNativeResult<'ctx> {
   /// Return values of a successful execution.
-  pub fn ok(/* cost: GasUnits<GasCarrier>, */values: Vec<SymValue<'ctx>>) -> Self {
+  pub fn ok(cost: InternalGasUnits<GasCarrier>, values: Vec<SymValue<'ctx>>) -> Self {
     SymNativeResult {
-      // cost,
+      cost,
       result: Ok(values),
     }
   }
 
   /// `VMStatus` of a failed execution. The failure is a runtime failure in the function
   /// and not an invariant failure of the VM which would raise a `VMResult` error directly.
-  pub fn err(/* cost: GasUnits<GasCarrier>, */err: VMStatus) -> Self {
+  pub fn err(cost: InternalGasUnits<GasCarrier>, abort_code: u64) -> Self {
     SymNativeResult {
-      // cost,
-      result: Err(err),
+      cost,
+      result: Err(abort_code),
     }
   }
 }
 
 /// Return the native gas entry in `CostTable` for the given key.
 /// The key is the specific native function index known to `CostTable`.
-pub fn native_gas(table: &CostTable, key: NativeCostIndex, size: usize) -> GasUnits<GasCarrier> {
+pub fn native_gas(
+  table: &CostTable,
+  key: NativeCostIndex,
+  size: usize,
+) -> InternalGasUnits<GasCarrier> {
   let gas_amt = table.native_cost(key as u8);
-  let memory_size = AbstractMemorySize::new(size as GasCarrier);
+  let memory_size = AbstractMemorySize::new(std::cmp::max(1, size) as GasCarrier);
+  debug_assert!(memory_size.get() > 0);
   gas_amt.total().mul(memory_size)
 }
 
@@ -112,6 +111,15 @@ pub fn native_gas(table: &CostTable, key: NativeCostIndex, size: usize) -> GasUn
 #[macro_export]
 macro_rules! pop_arg {
   ($arguments:ident, $t:ty) => {{
-    $arguments.pop_back().unwrap().value_as::<$t>()?
+    use $crate::natives::function::{NativeResult, PartialVMError, StatusCode};
+    match $arguments.pop_back().map(|v| v.value_as::<$t>()) {
+      None => {
+          return Err(PartialVMError::new(
+              StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
+          ))
+      }
+      Some(Err(e)) => return Err(e),
+      Some(Ok(v)) => v,
+    }
   }};
 }

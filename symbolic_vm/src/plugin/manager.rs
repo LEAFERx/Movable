@@ -1,10 +1,8 @@
 use crate::{
-  plugin::Plugin,
+  plugin::{Plugin, PluginContext},
   runtime::{
-    interpreter::SymInterpreter,
     loader::{Loader, Function},
   },
-  state::vm_context::SymbolicVMContext,
   types::values::SymValue,
 };
 
@@ -32,28 +30,27 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
     self.plugins.push(Box::new(p));
   }
 
-  pub(crate) fn before_execute_instruction<'vtxn>(
+  pub(crate) fn before_execute_instruction(
     &self,
-    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    plugin_context: &dyn PluginContext<'ctx>,
     instruction: &Bytecode
   ) -> PartialVMResult<()>{
     for plugin in self.plugins.iter() {
-      plugin.on_before_execute_instrcution(interpreter, instruction)?;
+      plugin.on_before_execute_instrcution(plugin_context, instruction)?;
     }
     Ok(())
   }
 
-  pub(crate) fn before_call<'vtxn>(
+  pub(crate) fn before_call(
     &self,
-    vm_ctx: &SymbolicVMContext<'vtxn, 'ctx>,
     loader: &Loader,
-    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    plugin_context: &dyn PluginContext<'ctx>,
     func: &Function,
     ty_args: Vec<Type>,
   ) -> PartialVMResult<bool>{
     let mut result = false;
     for plugin in self.plugins.iter() {
-      result = result || plugin.on_before_call(vm_ctx, loader, interpreter, func, ty_args.clone())?;
+      result = result || plugin.on_before_call(loader, plugin_context, func, ty_args.clone())?;
     }
     Ok(result)
   }
@@ -65,13 +62,13 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
     Ok(())
   }
 
-  pub(crate) fn after_execute<'vtxn>(
+  pub(crate) fn after_execute(
     &self,
-    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    plugin_context: &dyn PluginContext<'ctx>,
     return_values: &[SymValue<'ctx>],
   ) -> PartialVMResult<()> {
     for plugin in self.plugins.iter() {
-      plugin.on_after_execute(interpreter, return_values)?;
+      plugin.on_after_execute(plugin_context, return_values)?;
     }
     Ok(())
   }

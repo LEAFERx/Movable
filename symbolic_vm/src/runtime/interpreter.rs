@@ -20,6 +20,7 @@ use move_vm_types::{
   loaded_data::runtime_types::Type,
   // values::{self, SymIntegerValue, SymLocals, SymReference, Struct, StructRef, VMValueCast, SymValue},
 };
+use move_vm_runtime::data_cache::RemoteCache;
 use diem_vm::transaction_metadata::TransactionMetadata;
 use crate::{
   plugin::{
@@ -27,18 +28,16 @@ use crate::{
     PluginManager,
   },
   runtime::{
+    data_cache::SymDataCache,
     loader::{Function, Loader, Resolver},
     native_functions::SymFunctionContext,
   },
-  state::{
-    interpreter_state::SymInterpreterState,
-    vm_context::SymbolicVMContext,
-  },
   types::{
+    data_store::SymDataStore,
     values::{
       SymU8, SymU64, /* SymU128, */ SymBool, SymAccountAddress, /* SymGlobalValue, */
       SymIntegerValue, SymLocals, SymReference, SymStruct, SymStructRef, SymValue, VMSymValueCast,
-      SymbolicMoveValue,
+      SymGlobalValue, SymbolicMoveValue,
     },
   },
 };
@@ -82,70 +81,58 @@ use z3::{Context, Solver, SatResult, Model};
 //   };
 // }
 
+macro_rules! set_err_info {
+  ($frame:ident, $e:expr) => {{
+      $e.at_code_offset($frame.function.index(), $frame.pc)
+          .finish($frame.location())
+  }};
+}
+
 /// `Interpreter` instances can execute Move functions.
 ///
 /// An `Interpreter` instance is a stand alone execution context for a function.
 /// It mimics execution on a single thread, with an call stack and an operand stack.
-/// The `Interpreter` receives a reference to a data store used by certain opcodes
-/// to do operations on data on chain and a `TransactionMetadata` which is also used to resolve
-/// specific opcodes.
 
 // TODO: for convenient currently the struct and fields are made public, fix it
-pub struct SymInterpreter<'vtxn, 'ctx> {
+pub struct SymInterpreter<'ctx, 'r, 'l, R> {
   /// Operand stack, where Move `SymValue`s are stored for stack operations.
-  pub operand_stack: SymStack<'ctx>, // TODO: should not be pub
+  pub operand_stack: SymStack<'ctx>,
   /// The stack of active functions.
   call_stack: SymCallStack<'ctx>,
-  /// Transaction data to resolve special bytecodes (e.g. GetTxnSequenceNumber, GetTxnPublicKey,
-  /// GetTxnSenderAddress, ...)
-  txn_data: &'vtxn TransactionMetadata,
   // gas_schedule: &'vtxn CostTable,
   /// Z3 solver
   pub solver: Solver<'ctx>,
   pub path_conditions: Vec<SymBool<'ctx>>,
   pub spec_conditions: Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)>,
-  /// Intermediate state
-  pub state: SymInterpreterState<'ctx>, 
+  pub data_cache: SymDataCache<'ctx, 'r, 'l, R>, 
 }
 
-impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
+impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   /// Entrypoint into the interpreter. All external calls need to be routed through this
   /// function.
   pub(crate) fn entrypoint(
     z3_ctx: &'ctx Context,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    txn_data: &'vtxn TransactionMetadata,
-    // gas_schedule: &'vtxn CostTable,
     function: Arc<Function>,
     ty_args: Vec<Type>,
-    args: &Vec<SymValue<'ctx>>,
-  ) -> PartialVMResult<Self> {
-    // We charge an intrinsic amount of gas based upon the size of the transaction submitted
-    // (in raw bytes).
-    // let txn_size = txn_data.transaction_size();
-    // The callers of this function verify the transaction before executing it. Transaction
-    // verification ensures the following condition.
-    // TODO: This is enforced by Diem but needs to be enforced by other callers of the Move VM
-    // as well.
-    // assume!(txn_size.get() <= (MAX_TRANSACTION_SIZE_IN_BYTES as u64));
-    // We count the intrinsic cost of the transaction here, since that needs to also cover the
-    // setup of the function.
-    // let mut interp = Self::new(txn_data, gas_schedule);
-    let mut interp = Self::new(z3_ctx, vm_ctx, txn_data);
-    // gas!(
-    //   consume: context,
-    //   calculate_intrinsic_gas(txn_size, &gas_schedule.gas_constants)
-    // )?;
+    args: Vec<SymValue<'ctx>>,
+    remote: &'r R,
+    // cost_strategy: &mut 
+    loader: &'l Loader,
+  ) -> VMResult<Self> {
+    let data_cache = SymDataCache::new(z3_ctx, remote, loader);
+    let mut interp = Self::new(z3_ctx, data_cache);
     
     let mut locals = SymLocals::new(z3_ctx, function.local_count());
     // TODO: assert consistency of args and function formals
-    for (i, value) in args.iter().enumerate() {
-      locals.store_loc(i, value.copy_value())?;
+    for (i, value) in args.into_iter().enumerate() {
+      // TODO: wrong error handling...
+      locals.store_loc(i, value).map_err(|err| err.finish(Location::Undefined))?;
     }
     let current_frame = SymFrame::new(z3_ctx, function, ty_args, locals);
-    interp.call_stack.push(current_frame).or_else(|frame| {
+    interp.call_stack.push(current_frame).map_err(|frame| {
       let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
-      Err(interp.maybe_core_dump(err, &frame))
+      let err = set_err_info!(frame, err);
+      interp.maybe_core_dump(err, &frame)
     })?;
     Ok(interp)
   }
@@ -154,33 +141,29 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// given module cache and gas schedule.
   fn new(
     z3_ctx: &'ctx Context,
-    vm_ctx: &SymbolicVMContext<'vtxn, 'ctx>,
-    txn_data: &'vtxn TransactionMetadata,
-    // gas_schedule: &'vtxn CostTable,
+    // cost_strategy: &mut 
+    data_cache: SymDataCache<'ctx, 'r, 'l, R>,
   ) -> Self {
     SymInterpreter {
       operand_stack: SymStack::new(),
       call_stack: SymCallStack::new(),
-      // gas_schedule,
-      txn_data,
       solver: Solver::new(&z3_ctx),
       path_conditions: vec![],
       spec_conditions: vec![],
-      state: vm_ctx.create_intermediate_state(),
+      data_cache,
     }
   }
 
   fn fork(&self) -> Self {
     SymInterpreter {
-      operand_stack: self.operand_stack.clone(),
-      call_stack: self.call_stack.clone(),
-      txn_data: self.txn_data,
+      operand_stack: self.operand_stack.fork(),
+      call_stack: self.call_stack.fork(),
       solver: self.solver.translate(self.solver.get_context()),
       path_conditions: self.path_conditions.clone(),
       spec_conditions: self.spec_conditions.iter().map(
-        |(args, cond)| (args.iter().map(|v| v.copy_value()).collect(), cond.clone())
+        |(args, cond)| (args.iter().map(|v| v.copy_value().unwrap()).collect(), cond.clone())
       ).collect(),
-      state: self.state.clone(),
+      data_cache: self.data_cache.fork(),
     }
   }
 
@@ -192,19 +175,19 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   pub fn execute(
     mut self,
     loader: &Loader,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
     manager: &mut PluginManager<'_, 'ctx>,
-  ) -> PartialVMResult<SymInterpreterExecutionResult<'vtxn, 'ctx>> {
+  ) -> VMResult<SymInterpreterExecutionResult<'ctx, 'r, 'l, R>> {
     if let Some(mut current_frame) = self.call_stack.pop() {
       loop {
         let resolver = current_frame.resolver(loader);
         let exit_code = current_frame
-          .execute_code(&resolver, &mut self, vm_ctx, manager)
+          .execute_code(&resolver, &mut self, &mut self.data_cache, manager)
           .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
         match exit_code {
           ExitCode::Return => {
             if let Some(frame) = self.call_stack.pop() {
               current_frame = frame;
+              current_frame.pc += 1;
             } else {
               // Ok we have touched the end of the path, now let's report
               println!("Path explored: {:?}", self.solver);
@@ -219,18 +202,13 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
             }
           }
           ExitCode::Call(fh_idx) => {
-            // gas!(
-            //   instr: context,
-            //   self,
-            //   Opcodes::CALL,
-            //   AbstractMemorySize::new(1 as GasCarrier)
-            // )?;
-            let func = resolver.function_at(fh_idx);
-            if manager.before_call(vm_ctx, loader, &mut self, func.as_ref(), vec![])? {
+            let func = resolver.function_from_handle(fh_idx);
+            if manager.before_call( loader, &mut self, func.as_ref(), vec![])? {
               continue;
             }
             if func.is_native() {
-              self.call_native(&resolver, vm_ctx, func, vec![])?;
+              self.call_native(&resolver, func, vec![])?;
+              current_frame.pc += 1;
               continue;
             }
             // TODO: when a native function is executed, the current frame has not yet
@@ -324,169 +302,21 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     }
   }
 
-  /// Main loop for the execution of a function.
-  ///
-  /// This function sets up a `SymFrame` and calls `execute_code_unit` to execute code of the
-  /// function represented by the frame. Control comes back to this function on return or
-  /// on call. When that happens the frame is changes to a new one (call) or to the one
-  /// at the top of the stack (return). If the call stack is empty execution is completed.
-  // REVIEW: create account will be removed in favor of a native function (no opcode) and
-  // we can simplify this code quite a bit.
-  fn _execute_main(
-    &mut self,
-    solver: &Solver<'ctx>,
-    loader: &Loader,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    function: Arc<Function>,
-    ty_args: Vec<Type>,
-    args: Vec<SymValue<'ctx>>,
-  ) -> PartialVMResult<()> {
-    let mut msg = String::from("\n-------------------------\n");
-
-    let int_plugin = IntegerArithmeticPlugin::new();
-    let mut manager = PluginManager::new();
-    manager.add_plugin(int_plugin);
-  
-    let mut locals = SymLocals::new(solver.get_context(), function.local_count());
-    // TODO: assert consistency of args and function formals
-    for (i, value) in args.iter().enumerate() {
-      locals.store_loc(i, value.copy_value())?;
-    }
-    let mut current_frame = SymFrame::new(solver.get_context(), function, ty_args, locals);
-    loop {
-      let resolver = current_frame.resolver(loader);
-      let exit_code = current_frame //self
-        .execute_code(&resolver, self, vm_ctx, &mut manager)
-        .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
-      match exit_code {
-        ExitCode::Return => {
-          if let Some(frame) = self.call_stack.pop() {
-            current_frame = frame;
-          } else {
-            // return Ok(());
-            break;
-          }
-        }
-        ExitCode::Call(fh_idx) => {
-          // gas!(
-          //   instr: context,
-          //   self,
-          //   Opcodes::CALL,
-          //   AbstractMemorySize::new(1 as GasCarrier)
-          // )?;
-          let func = resolver.function_at(fh_idx);
-          if func.is_native() {
-            // self.call_native(&resolver, context, func, vec![])?;
-            continue;
-          }
-          // TODO: when a native function is executed, the current frame has not yet
-          // been pushed onto the call stack. Fix it.
-          let frame = self
-            .make_call_frame(solver.get_context(), func, vec![])
-            .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
-          self.call_stack.push(current_frame).or_else(|frame| {
-            let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
-            Err(self.maybe_core_dump(err, &frame))
-          })?;
-          current_frame = frame;
-        }
-        ExitCode::Branch(instr, condition, offset) => {
-          println!(
-            "Hit Br{{{:?}}} instr, condition is {:?}, target offset is {:?}",
-            instr,
-            condition,
-            offset,
-          );
-          // Temp use fork to explore all branch
-          // Use task stack to implement DFS later
-          match fork() {
-            Ok(ForkResult::Parent { .. }) => {
-              msg += &format!("Fork parent: assume {:?}->{:#?}\n", instr, condition);
-              if instr {
-                solver.assert(&condition.as_inner());
-              } else {
-                solver.assert(&condition.not().as_inner());
-              }
-              if solver.check() == SatResult::Unsat {
-                msg += "Parent not satisfied, exit.\n";
-                msg += "-------------------------\n";
-                print!("{}", msg);
-                exit(0);
-              }
-              current_frame.pc = offset;
-            }
-            Ok(ForkResult::Child) => {
-              msg += &format!("Fork child: assume {:?}->{:#?}\n", !instr, condition);
-              if instr {
-                solver.assert(&condition.not().as_inner());
-              } else {
-                solver.assert(&condition.as_inner());
-              }
-              if solver.check() == SatResult::Unsat {
-                msg += "Child not satisfied, exit.\n";
-                msg += "-------------------------\n";
-                print!("{}", msg);
-                exit(0);
-              }
-            }
-            Err(_) => {
-              return Err(PartialVMError::new(StatusCode::ABORTED).with_message("Unable to fork, abort.".to_string()));
-            }
-          }
-        }
-        ExitCode::CallGeneric(_) => unimplemented!(),
-        // ExitCode::CallGeneric(idx) => {
-        //   let func_inst = resolver.function_instantiation_at(idx);
-        //   // gas!(
-        //   //   instr: context,
-        //   //   self,
-        //   //   Opcodes::CALL_GENERIC,
-        //   //   AbstractMemorySize::new((func_inst.instantiation_size() + 1) as GasCarrier)
-        //   // )?;
-        //   let func = loader.function_at(func_inst.handle());
-        //   let ty_args = func_inst.materialize(current_frame.ty_args())?;
-        //   if func.is_native() {
-        //     self.call_native(&resolver, context, func, ty_args)?;
-        //     continue;
-        //   }
-        //   // TODO: when a native function is executed, the current frame has not yet
-        //   // been pushed onto the call stack. Fix it.
-        //   let frame = self
-        //     .make_call_frame(solver, func, ty_args)
-        //     .or_else(|err| Err(self.maybe_core_dump(err, &current_frame)))?;
-        //   self.call_stack.push(current_frame).or_else(|frame| {
-        //     let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
-        //     Err(self.maybe_core_dump(err, &frame))
-        //   })?;
-        //   current_frame = frame;
-        // }
-      }
-    }
-    solver.check(); // TODO: avoid unchecked get_model
-    let model = solver.get_model().unwrap();
-    msg += "Test Function Arguments\n";
-    for (i, v) in args.into_iter().enumerate() {
-      msg += &format!("  {}: {:#?}\n", i, model.eval(&v.as_ast()?));
-    }
-    msg += "Test Function Returns\n";
-    for i in 0..current_frame.function.return_count() {
-      msg += &format!("  {}: {:#?}\n", i, self.operand_stack.pop()?);
-    }
-    msg += "-------------------------\n";
-    print!("{}", msg);
-    Ok(())
-  }
-
   /// Returns a `SymFrame` if the call is to a Move function. Calls to native functions are
   /// "inlined" and this returns `None`.
   ///
   /// Native functions do not push a frame at the moment and as such errors from a native
   /// function are incorrectly attributed to the caller.
-  fn make_call_frame(&mut self, z3_ctx: &'ctx Context, func: Arc<Function>, ty_args: Vec<Type>) -> PartialVMResult<SymFrame<'ctx>> {
+  fn make_call_frame(&mut self, z3_ctx: &'ctx Context, func: Arc<Function>, ty_args: Vec<Type>) -> VMResult<SymFrame<'ctx>> {
     let mut locals = SymLocals::new(z3_ctx, func.local_count());
     let arg_count = func.arg_count();
     for i in 0..arg_count {
-      locals.store_loc(arg_count - i - 1, self.operand_stack.pop()?)?;
+      locals
+        .store_loc(
+          arg_count - i - 1,
+          self.operand_stack.pop().map_err(|e| self.set_location(e))?
+        )
+        .map_err(|e| self.set_location(e))?;
     }
     Ok(SymFrame::new(
       z3_ctx,
@@ -499,8 +329,26 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// Call a native functions.
   fn call_native(
     &mut self,
-    resolver: &Resolver,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+    resolver: &Resolver<'l>,
+    function: Arc<Function>,
+    ty_args: Vec<Type>,
+  ) -> VMResult<()> {
+    self.call_native_impl(resolver, function, ty_args)
+      .map_err(|e| match function.module_id() {
+        Some(id) => e
+          .at_code_offset(function.index(), 0)
+          .finish(Location::Module(id.clone())),
+        None => {
+          let err = PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+            .with_message("Unexpected native function not located in a module".to_owned());
+          self.set_location(err)
+        }
+      })
+  }
+
+  fn call_native_impl(
+    &mut self,
+    resolver: &Resolver<'l>,
     function: Arc<Function>,
     ty_args: Vec<Type>,
   ) -> PartialVMResult<()> {
@@ -509,16 +357,16 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     for _ in 0..expected_args {
       arguments.push_front(self.operand_stack.pop()?);
     }
-    let mut native_context = SymFunctionContext::new(self.state.get_z3_ctx(), self, vm_ctx, resolver);
+    let mut native_context = SymFunctionContext::new(self, &mut self.data_cache, resolver);
     let native_function = function.get_native()?;
     let result = native_function.dispatch(&mut native_context, ty_args, arguments)?;
-    // gas!(consume: context, result.cost)?;
-    result.result.and_then(|values| {
-      for value in values {
-        self.operand_stack.push(value)?;
-      }
-      Ok(())
-    })
+    let return_values = result
+      .result
+      .map_err(|code| PartialVMError::new(StatusCode::ABORTED).with_sub_status(code))?;
+    for value in return_values {
+      self.operand_stack.push(value)?;
+    }
+    Ok(())
   }
 
   /// Perform a binary operation to two values at the top of the stack.
@@ -556,110 +404,58 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     self.binop(|lhs, rhs| Ok(SymValue::from_sym_bool(f(lhs, rhs)?)))
   }
 
-  /// Entry point for all global store operations (effectively opcodes).
-  ///
-  /// This performs common operation on the data store and then executes the specific
-  /// opcode.
-  fn global_data_op<F>(
+  /// Load a resource from the data store.
+  fn load_resource(
     &mut self,
-    resolver: &Resolver,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    address: AccountAddress,
-    idx: StructDefinitionIndex,
-    resource: Option<SymStruct<'ctx>>,
-    op: F,
-  ) -> PartialVMResult<AbstractMemorySize<GasCarrier>>
-  where
-    F: FnOnce(
-      &mut Self,
-      &mut SymbolicVMContext<'vtxn, 'ctx>,
-      AccessPath,
-      &MoveStructLayout,
-      Option<SymStruct<'ctx>>,
-    ) -> PartialVMResult<AbstractMemorySize<GasCarrier>>,
-  {
-    let struct_type = resolver.struct_at(idx);
-    let diem_type = resolver.get_diem_type_info(
-      &struct_type.module,
-      struct_type.name.as_ident_str(),
-      &[],
-      vm_ctx,
-    )?;
-    let ap = AccessPath::new(address, diem_type.resource_key().to_vec());
-    op(self, vm_ctx, ap, diem_type.fat_type(), resource)
-  }
-
-  fn global_data_op_generic<F>(
-    &mut self,
-    resolver: &Resolver,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    address: AccountAddress,
-    idx: StructDefInstantiationIndex,
-    frame: &SymFrame,
-    resource: Option<SymStruct<'ctx>>,
-    op: F,
-  ) -> PartialVMResult<AbstractMemorySize<GasCarrier>>
-  where
-    F: FnOnce(
-      &mut Self,
-      &mut SymbolicVMContext<'vtxn, 'ctx>,
-      AccessPath,
-      &MoveStructLayout,
-      Option<SymStruct<'ctx>>,
-    ) -> PartialVMResult<AbstractMemorySize<GasCarrier>>,
-  {
-    let struct_inst = resolver.struct_instantiation_at(idx);
-    let mut instantiation = vec![];
-    for inst in struct_inst.get_instantiation() {
-      instantiation.push(inst.subst(frame.ty_args())?);
+    addr: AccountAddress,
+    ty: &Type,
+  ) -> PartialVMResult<&mut SymGlobalValue<'ctx>> {
+    match self.data_cache.load_resource(addr, ty) {
+      Ok(gv) => Ok(gv),
+      Err(e) => {
+        // log_context.alert();
+        // error!(
+        //   *log_context,
+        //   "[VM] error loading resource at ({}, {:?}): {:?} from data store", addr, ty, e
+        // );
+        Err(e)
+      }
     }
-    let struct_type = resolver.struct_type_at(struct_inst.get_def_idx());
-    let diem_type = resolver.get_diem_type_info(
-      &struct_type.module,
-      struct_type.name.as_ident_str(),
-      &instantiation,
-      vm_ctx,
-    )?;
-    let ap = AccessPath::new(address, diem_type.resource_key().to_vec());
-    op(self, vm_ctx, ap, diem_type.fat_type(), resource)
   }
 
   /// BorrowGlobal (mutable and not) opcode.
   fn borrow_global(
     &mut self,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    ap: AccessPath,
-    struct_ty: &MoveStructLayout,
-    _resource: Option<SymStruct<'ctx>>,
+    addr: AccountAddress,
+    ty: &Type,
   ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-    let g = self.state.borrow_global(vm_ctx, &ap, struct_ty)?;
+    let g = self.load_resource(addr, ty)?.borrow_global()?;
     let size = g.size();
-    self.operand_stack.push(g.borrow_global()?)?;
+    self.operand_stack.push(g)?;
     Ok(size)
   }
 
   /// Exists opcode.
   fn exists(
     &mut self,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    ap: AccessPath,
-    struct_ty: &MoveStructLayout,
-    _resource: Option<SymStruct<'ctx>>,
+    addr: AccountAddress,
+    ty: &Type,
   ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-    let (exists, mem_size) = self.state.resource_exists(vm_ctx, &ap, struct_ty)?;
-    self.operand_stack.push(SymValue::from_bool(self.solver.get_context(), exists))?;
+    let gv = self.load_resource(addr, ty)?;
+    let mem_size = gv.size();
+    let exists = gv.exists()?;
+    self.operand_stack.push(SymValue::from_bool(
+      self.solver.get_context(), exists))?;
     Ok(mem_size)
   }
 
   /// MoveFrom opcode.
   fn move_from(
     &mut self,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    ap: AccessPath,
-    struct_ty: &MoveStructLayout,
-    _resource: Option<SymStruct<'ctx>>,
+    addr: AccountAddress,
+    ty: &Type,
   ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-    let resource = self.state.move_resource_from(vm_ctx, &ap, struct_ty)?;
+    let resource = self.load_resource(addr, ty)?.move_from()?;
     let size = resource.size();
     self.operand_stack.push(resource)?;
     Ok(size)
@@ -668,35 +464,12 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   /// MoveTo opcode.
   fn move_to(
     &mut self,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    ap: AccessPath,
-    struct_ty: &MoveStructLayout,
-    resource: Option<SymStruct<'ctx>>,
+    addr: AccountAddress,
+    ty: &Type,
+    resource: SymValue<'ctx>,
   ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-    match resource {
-      Some(resource) => {
-        let size = resource.size();
-        self.state.move_resource_to(vm_ctx, &ap, struct_ty, resource)?;
-        Ok(size)
-      }
-      None => Err(
-        PartialVMError::new(StatusCode::MOVETO_NO_RESOURCE_ERROR)
-          .with_message("Should not happenned! SymInterpreter::move_to was not supplied with a resource!".to_string())
-      )
-    }
-  }
-
-  /// MoveToSender opcode.
-  fn move_to_sender(
-    &mut self,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
-    ap: AccessPath,
-    struct_ty: &MoveStructLayout,
-    _resource: Option<SymStruct<'ctx>>,
-  ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-    let resource = self.operand_stack.pop_as::<SymStruct>()?;
     let size = resource.size();
-    self.state.move_resource_to(vm_ctx, &ap, struct_ty, resource)?;
+    self.load_resource(addr, ty)?.move_to(resource)?;
     Ok(size)
   }
 
@@ -705,111 +478,31 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
   //
 
   /// Given an `VMStatus` generate a core dump if the error is an `InvariantViolation`.
-  fn maybe_core_dump(&self, mut err: VMStatus, current_frame: &SymFrame) -> VMStatus {
+  fn maybe_core_dump(&self, mut err: VMError, current_frame: &SymFrame<'ctx>) -> VMError {
     // a verification error cannot happen at runtime so change it into an invariant violation.
     if err.status_type() == StatusType::Verification {
-      error!("Verification error during runtime: {:?}", err);
-      let mut new_err = PartialVMError::new(StatusCode::VERIFICATION_ERROR);
-      new_err.message = err.message;
-      err = new_err;
+      // self.log_context.alert();
+      // error!(
+      //   self.log_context,
+      //   "Verification error during runtime: {:?}", err
+      // );
+      let new_err = PartialVMError::new(StatusCode::VERIFICATION_ERROR);
+      let new_err = match err.message() {
+          None => new_err,
+          Some(msg) => new_err.with_message(msg.to_owned()),
+      };
+      err = new_err.finish(err.location().clone())
     }
-    if err.is(StatusType::InvariantViolation) {
+    if err.status_type() == StatusType::InvariantViolation {
       let state = self.get_internal_state(current_frame);
-      error!(
-        "Error: {:?}\nCORE DUMP: >>>>>>>>>>>>\n{}\n<<<<<<<<<<<<\n",
-        err,
-        state,
-      );
+      // self.log_context.alert();
+      // error!(
+      //   self.log_context,
+      //   "Error: {:?}\nCORE DUMP: >>>>>>>>>>>>\n{}\n<<<<<<<<<<<<\n", err, state,
+      // );
     }
     err
   }
-
-  // #[allow(dead_code)]
-  // fn debug_print_frame<B: Write>(
-  //   &self,
-  //   buf: &mut B,
-  //   resolver: &Resolver,
-  //   idx: usize,
-  //   frame: &SymFrame,
-  // ) -> PartialVMResult<()> {
-  //   // Print out the function name with type arguments.
-  //   let func = &frame.function;
-
-  //   debug_write!(buf, "    [{}] ", idx)?;
-  //   if let Some(module) = func.module_id() {
-  //     debug_write!(buf, "{}::{}::", module.address(), module.name(),)?;
-  //   }
-  //   debug_write!(buf, "{}", func.name())?;
-  //   let ty_args = frame.ty_args();
-  //   let mut fat_ty_args = vec![];
-  //   for ty in ty_args {
-  //     fat_ty_args.push(resolver.type_to_fat_type(ty)?);
-  //   }
-  //   if !fat_ty_args.is_empty() {
-  //     debug_write!(buf, "<")?;
-  //     let mut it = fat_ty_args.iter();
-  //     if let Some(ty) = it.next() {
-  //       ty.debug_print(buf)?;
-  //       for ty in it {
-  //         debug_write!(buf, ", ")?;
-  //         ty.debug_print(buf)?;
-  //       }
-  //     }
-  //     debug_write!(buf, ">")?;
-  //   }
-  //   debug_writeln!(buf)?;
-
-  //   // Print out the current instruction.
-  //   debug_writeln!(buf)?;
-  //   debug_writeln!(buf, "        Code:")?;
-  //   let pc = frame.pc as usize;
-  //   let code = func.code();
-  //   let before = if pc > 3 { pc - 3 } else { 0 };
-  //   let after = min(code.len(), pc + 4);
-  //   for (idx, instr) in code.iter().enumerate().take(pc).skip(before) {
-  //     debug_writeln!(buf, "            [{}] {:?}", idx, instr)?;
-  //   }
-  //   debug_writeln!(buf, "          > [{}] {:?}", pc, &code[pc])?;
-  //   for (idx, instr) in code.iter().enumerate().take(after).skip(pc + 1) {
-  //     debug_writeln!(buf, "            [{}] {:?}", idx, instr)?;
-  //   }
-
-  //   // Print out the locals.
-  //   debug_writeln!(buf)?;
-  //   debug_writeln!(buf, "        SymLocals:")?;
-  //   if func.local_count() > 0 {
-  //     let mut tys = vec![];
-  //     for local in &func.locals().0 {
-  //       tys.push(resolver.make_fat_type(local, ty_args)?);
-  //     }
-  //     values::debug::print_locals(buf, &tys, &frame.locals)?;
-  //     debug_writeln!(buf)?;
-  //   } else {
-  //     debug_writeln!(buf, "            (none)")?;
-  //   }
-
-  //   debug_writeln!(buf)?;
-  //   Ok(())
-  // }
-
-  // #[allow(dead_code)]
-  // pub(crate) fn debug_print_stack_trace<B: Write>(
-  //   &self,
-  //   buf: &mut B,
-  //   resolver: &Resolver,
-  // ) -> PartialVMResult<()> {
-  //   debug_writeln!(buf, "Call Stack:")?;
-  //   for (i, frame) in self.call_stack.0.iter().enumerate() {
-  //     self.debug_print_frame(buf, resolver, i, frame)?;
-  //   }
-  //   debug_writeln!(buf, "Operand Stack:")?;
-  //   for (idx, val) in self.operand_stack.0.iter().enumerate() {
-  //     // TODO: Currently we do not know the types of the values on the operand stack.
-  //     // Revisit.
-  //     debug_writeln!(buf, "    [{}] {}", idx, val)?;
-  //   }
-  //   Ok(())
-  // }
 
   /// Generate a string which is the status of the interpreter: call stack, current bytecode
   /// stream, locals and operand stack.
@@ -856,10 +549,14 @@ impl<'vtxn, 'ctx> SymInterpreter<'vtxn, 'ctx> {
     }
     internal_state
   }
+
+  fn set_location(&self, err: PartialVMError) -> VMError {
+    err.finish(self.call_stack.current_location())
+  }
 }
 
-pub enum SymInterpreterExecutionResult<'vtxn, 'ctx> {
-  Fork(Vec<SymInterpreter<'vtxn, 'ctx>>),
+pub enum SymInterpreterExecutionResult<'ctx, 'r, 'l, R> {
+  Fork(Vec<SymInterpreter<'ctx, 'r, 'l, R>>),
   Report(Model<'ctx>, Vec<SymValue<'ctx>>)
 }
 
@@ -914,17 +611,16 @@ impl<'ctx> SymStack<'ctx> {
     let args = self.0.split_off(remaining_stack_size);
     Ok(args)
   }
+
+  fn fork(&self) -> Self {
+    SymStack(self.0.iter().map(|x| x.copy_value().unwrap()).collect())
+  }
 }
 
-impl<'ctx> Clone for SymStack<'ctx> {
-  fn clone(&self) -> Self {
-    SymStack(self.0.iter().map(|x| x.copy_value()).collect())
-  }
-} 
-
 /// A call stack.
-#[derive(Debug, Clone)]
-struct SymCallStack<'ctx>(Vec<SymFrame<'ctx>>);
+// TODO: should not be public
+#[derive(Debug)]
+pub struct SymCallStack<'ctx>(Vec<SymFrame<'ctx>>);
 
 impl<'ctx> SymCallStack<'ctx> {
   /// Create a new empty call stack.
@@ -946,11 +642,20 @@ impl<'ctx> SymCallStack<'ctx> {
   fn pop(&mut self) -> Option<SymFrame<'ctx>> {
     self.0.pop()
   }
+
+  fn current_location(&self) -> Location {
+    let location_opt = self.0.last().map(|frame| frame.location());
+    location_opt.unwrap_or(Location::Undefined)
+  }
+  
+  fn fork(&self) -> Self {
+    Self(self.0.iter().map(|frame| frame.fork()).collect())
+  }
 }
 
 /// A `SymFrame` is the execution context for a function. It holds the locals of the function and
 /// the function itself.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct SymFrame<'ctx> {
   z3_ctx: &'ctx Context,
   pc: u16,
@@ -990,11 +695,25 @@ impl<'ctx> SymFrame<'ctx> {
   }
 
   /// Execute a Move function until a return or a call opcode is found.
-  fn execute_code<'vtxn>(
+  fn execute_code<'r, 'l, R: RemoteCache>(
     &mut self,
     resolver: &Resolver,
-    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
-    vm_ctx: &mut SymbolicVMContext<'vtxn, 'ctx>,
+    interpreter: &mut SymInterpreter<'ctx, 'r, 'l, R>,
+    data_store: &mut impl SymDataStore<'ctx>,
+    manager: &mut PluginManager<'_, 'ctx>
+  ) -> VMResult<ExitCode<'ctx>> {
+    self.execute_code_impl(resolver, interpreter, data_store, manager)
+      .map_err(|e| {
+        e.at_code_offset(self.function.index(), self.pc)
+          .finish(self.location())
+      })
+  }
+  
+  fn execute_code_impl<'r, 'l, R: RemoteCache>(
+    &mut self,
+    resolver: &Resolver,
+    interpreter: &mut SymInterpreter<'ctx, 'r, 'l, R>,
+    data_store: &mut impl SymDataStore<'ctx>,
     manager: &mut PluginManager<'_, 'ctx>
   ) -> PartialVMResult<ExitCode<'ctx>> {
     let code = self.function.code();
@@ -1566,5 +1285,22 @@ impl<'ctx> SymFrame<'ctx> {
 
   fn resolver<'a>(&self, loader: &'a Loader) -> Resolver<'a> {
     self.function.get_resolver(loader)
+  }
+
+  fn location(&self) -> Location {
+    match self.function.module_id() {
+      None => Location::Script,
+      Some(id) => Location::Module(id.clone()),
+    }
+  }
+
+  fn fork(&self) -> Self {
+    Self {
+      z3_ctx: self.z3_ctx,
+      pc: self.pc,
+      function: self.function.clone(),
+      ty_args: self.ty_args.clone(),
+      locals: self.locals.fork(),
+    }
   }
 }

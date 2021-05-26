@@ -10,7 +10,6 @@ use diem_vm::{
 };
 use crate::{
   runtime::{interpreter::{SymInterpreter, SymInterpreterExecutionResult}, loader::Loader},
-  state::vm_context::SymbolicVMContext,
 };
 use vm::{
   access::ModuleAccess,

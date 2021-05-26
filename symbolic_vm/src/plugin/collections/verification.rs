@@ -1,6 +1,5 @@
 use move_core_types::{
   identifier::Identifier,
-  vm_status::{StatusCode, VMStatus},
 };
 
 use vm::{
@@ -9,13 +8,9 @@ use vm::{
 };
 
 use crate::{
-  plugin::Plugin,
+  plugin::{Plugin, PluginContext},
   runtime::{
-    interpreter::SymInterpreter,
     loader::{Loader, Function},
-  },
-  state::{
-    vm_context::SymbolicVMContext,
   },
   types::values::{SymBool, SymValue, SymbolicMoveValue},
 };
@@ -91,20 +86,19 @@ impl<'a, 'ctx> VerificationPlugin<'a, 'ctx> {
 }
 
 impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
-  fn on_before_call<'vtxn>(
+  fn on_before_call(
     &self,
-    _vm_ctx: &SymbolicVMContext<'vtxn, 'ctx>,
     _loader: &Loader,
-    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    plugin_ctx: &dyn PluginContext<'ctx>,
     func: &Function,
     _ty_args: Vec<Type>,
   ) -> PartialVMResult<bool> {
     match self.specs.get(&Identifier::new(func.name()).unwrap())  {
       Some(spec) => {
-        let z3_ctx = interpreter.state.get_z3_ctx();
-        let solver = &interpreter.solver;
+        let z3_ctx = plugin_ctx.z3_ctx();
+        let solver = plugin_ctx.solver();
         let arg_count = func.arg_count();
-        let args = interpreter.operand_stack.popn(arg_count.try_into().unwrap())?;
+        let args = plugin_ctx.operand_stack().popn(arg_count.try_into().unwrap())?;
         solver.push();
         solver.assert(&spec.pre(args.as_slice()).as_inner().not());
         if solver.check() == SatResult::Sat {
@@ -129,9 +123,9 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
         let post_cond = spec.post(args.as_slice(), returns.as_slice());
         solver.assert(post_cond.as_inner());
         // TODO: consider if at here solver is unsat
-        interpreter.spec_conditions.push((args, post_cond));
+        plugin_ctx.spec_conditions().push((args, post_cond));
         for val in returns {
-          interpreter.operand_stack.push(val)?;
+          plugin_ctx.operand_stack().push(val)?;
         }
         Ok(true)
       }
@@ -141,16 +135,17 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
 
   // fn on_after_call capture the return value
 
-  fn on_after_execute<'vtxn>(
+  fn on_after_execute(
     &self,
-    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    plugin_ctx: &dyn PluginContext<'ctx>,
     // args: &[SymValue<'ctx>],
     return_values: &[SymValue<'ctx>],
   ) -> PartialVMResult<()> {
-    interpreter.solver.push();
-    interpreter.solver.assert(self.target.post(&[], return_values).as_inner()); // TODO: args should not be empty!!
-    if interpreter.solver.check() == SatResult::Sat {
-      interpreter.solver.pop(1);
+    let solver = plugin_ctx.solver();
+    solver.push();
+    solver.assert(self.target.post(&[], return_values).as_inner()); // TODO: args should not be empty!!
+    if solver.check() == SatResult::Sat {
+      solver.pop(1);
       println!("-------VERIFICATION BEGIN-------");
       println!("Post condition meet in this path!");
       println!("-------VERIFICATION END---------");
@@ -159,24 +154,24 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
     println!("-------VERIFICATION BEGIN-------");
     println!("Counter example found! See SUGGESTION and REPORT section.");
     println!("-------VERIFICATION END---------");
-    interpreter.solver.pop(1);
-    let pc = Bool::and(self.context,
-      &interpreter.path_conditions.iter()
-        .chain(interpreter.spec_conditions.iter().map(|(_, s)| s)).map(|v| v.as_inner())
+    solver.pop(1);
+    let pc = Bool::and(self.z3_ctx,
+      &plugin_ctx.path_conditions().iter()
+        .chain(plugin_ctx.spec_conditions().iter().map(|(_, s)| s)).map(|v| v.as_inner())
         .collect::<Vec<_>>());
-    for (spec_inputs, spec) in interpreter.spec_conditions.iter() {
+    for (spec_inputs, spec) in plugin_ctx.spec_conditions().iter() {
       let spec_vars = collect_variables(spec.as_inner());
-      let solver = Solver::new(self.context);
-      let projected = project(self.context, &pc, &spec_vars).expect("Quantifier Elimination Failed!");
+      let solver = Solver::new(self.z3_ctx);
+      let projected = project(self.z3_ctx, &pc, &spec_vars).expect("Quantifier Elimination Failed!");
       let phi = spec.as_inner();
       solver.assert(phi);
       solver.assert(&projected.not());
       match solver.check() {
         SatResult::Sat => {
           let inputs = HashSet::from_iter(spec_inputs.iter().map(|v| v.as_ast().unwrap()));
-          let projected_input = project(self.context, &pc, &inputs).expect("Quantifier Elimination Failed!");
-          let suggested = Bool::and(self.context, &[
-            &projected_input.implies(&Bool::and(self.context, &[&projected.not(), phi]).simplify()),
+          let projected_input = project(self.z3_ctx, &pc, &inputs).expect("Quantifier Elimination Failed!");
+          let suggested = Bool::and(self.z3_ctx, &[
+            &projected_input.implies(&Bool::and(self.z3_ctx, &[&projected.not(), phi]).simplify()),
             &projected_input.not().implies(phi)]);
           println!("-------SUGGESTION BEGIN-------");
           println!("previous condition:");

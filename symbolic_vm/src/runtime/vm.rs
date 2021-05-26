@@ -6,12 +6,11 @@ use move_core_types::{
 use diem_vm::{
   transaction_metadata::TransactionMetadata,
 };
-use crate::state::vm_context::SymbolicVMContext;
 // use diem_types::{
 //   vm_error::{StatusCode, VMStatus},
 // };
 use vm::{
-  errors::VMResult,
+  errors::PartialVMResult,
   file_format::{
     SignatureToken, CompiledModule,
   },
@@ -47,9 +46,9 @@ impl<'ctx> SymbolicVM<'ctx> {
     // ty_args: Vec<TypeTag>,
     // args: Vec<SymValue<'ctx>>,
   ) -> PartialVMResult<()> {
-    let (ty_args, args) = construct_symbolic_args(module, function_name, self.context, &self.runtime, vm_ctx)?;
+    let (ty_args, args) = construct_symbolic_args(module, function_name, self.z3_ctx, &self.runtime, vm_ctx)?;
     self.runtime.execute_function(
-      self.context,
+      self.z3_ctx,
       vm_ctx,
       txn_data,
       plugin_manager,

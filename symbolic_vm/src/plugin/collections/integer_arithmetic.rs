@@ -1,5 +1,5 @@
 use crate::{
-  plugin::Plugin,
+  plugin::{Plugin, PluginContext},
   runtime::interpreter::SymInterpreter,
   types::values::SymIntegerValue,
 };
@@ -24,15 +24,15 @@ impl IntegerArithmeticPlugin {
 impl<'ctx> Plugin<'ctx> for IntegerArithmeticPlugin {
   fn on_before_execute_instrcution<'vtxn>(
     &self,
-    interpreter: &mut SymInterpreter<'vtxn, 'ctx>,
+    plugin_ctx: &dyn PluginContext<'ctx>,
     instruction: &Bytecode
   ) -> PartialVMResult<()>{
-    let solver = &interpreter.solver;
+    let solver = &plugin_ctx.solver();
     match instruction {
       Bytecode::Add => {
         solver.push();
-        let lhs = interpreter.operand_stack.pop_as::<SymIntegerValue>()?;
-        let rhs = interpreter.operand_stack.pop_as::<SymIntegerValue>()?;
+        let lhs = plugin_ctx.operand_stack().pop_as::<SymIntegerValue>()?;
+        let rhs = plugin_ctx.operand_stack().pop_as::<SymIntegerValue>()?;
         let (bv_l, bv_r) = match (&lhs, &rhs) {
           (SymIntegerValue::U8(l), SymIntegerValue::U8(r)) => {
             Ok((l.as_inner(), r.as_inner()))
@@ -57,8 +57,8 @@ impl<'ctx> Plugin<'ctx> for IntegerArithmeticPlugin {
           }
           _ => {}
         }
-        interpreter.operand_stack.push(rhs.into_value())?;
-        interpreter.operand_stack.push(lhs.into_value())?;
+        plugin_ctx.operand_stack().push(rhs.into_value())?;
+        plugin_ctx.operand_stack().push(lhs.into_value())?;
         solver.pop(1);
       }
       Bytecode::Sub => {
