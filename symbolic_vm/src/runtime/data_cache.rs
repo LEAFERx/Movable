@@ -58,7 +58,7 @@ pub struct SymDataCache<'ctx, 'r, 'l, R> {
 }
 
 impl<'ctx, 'r, 'l, R: RemoteCache> SymDataCache<'ctx, 'r, 'l, R> {
-  pub fn new(z3_ctx: &'ctx Context, remote: &'r R, loader: &'l Loader) -> Self {
+  pub(crate) fn new(z3_ctx: &'ctx Context, remote: &'r R, loader: &'l Loader) -> Self {
     Self {
       z3_ctx,
       remote,

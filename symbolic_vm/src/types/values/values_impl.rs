@@ -166,7 +166,7 @@ struct SymStructImpl<'ctx> {
 }
 
 #[derive(Debug)]
-struct SymVectorImpl<'ctx> {
+pub(crate) struct SymVectorImpl<'ctx> {
   z3_ctx: &'ctx Context,
   element_type: TypeTag,
   datatype: Rc<RefCell<DatatypeSort<'ctx>>>,
@@ -1624,7 +1624,7 @@ impl<'ctx> SymValue<'ctx> {
     Ok(SymValue::from_sym_struct(SymStruct::pack(z3_ctx, &ty, fields)?))
   }
 
-  pub fn from_sym_struct_impl(s: SymStructImpl<'ctx>) -> Self {
+  fn from_sym_struct_impl(s: SymStructImpl<'ctx>) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::Struct(Rc::new(
       RefCell::new(s),
     ))))
@@ -1636,37 +1636,37 @@ impl<'ctx> SymValue<'ctx> {
     ))))
   }
 
-  pub fn from_sym_vector(v: SymVectorImpl<'ctx>) -> Self {
+  pub(crate) fn from_sym_vector(v: SymVectorImpl<'ctx>) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::Vec(Rc::new(
       RefCell::new(v),
     ))))
   }
 
-  pub fn from_sym_vec_u8(v: SymVectorImpl<'ctx>) -> Self {
+  pub(crate) fn from_sym_vec_u8(v: SymVectorImpl<'ctx>) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::VecU8(Rc::new(
       RefCell::new(v),
     ))))
   }
 
-  pub fn from_sym_vec_u64(v: SymVectorImpl<'ctx>) -> Self {
+  pub(crate) fn from_sym_vec_u64(v: SymVectorImpl<'ctx>) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::VecU64(Rc::new(
       RefCell::new(v),
     ))))
   }
 
-  pub fn from_sym_vec_u128(v: SymVectorImpl<'ctx>) -> Self {
+  pub(crate) fn from_sym_vec_u128(v: SymVectorImpl<'ctx>) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::VecU128(Rc::new(
       RefCell::new(v),
     ))))
   }
 
-  pub fn from_sym_vec_bool(v: SymVectorImpl<'ctx>) -> Self {
+  pub(crate) fn from_sym_vec_bool(v: SymVectorImpl<'ctx>) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::VecBool(Rc::new(
       RefCell::new(v),
     ))))
   }
 
-  pub fn from_sym_vec_address(v: SymVectorImpl<'ctx>) -> Self {
+  pub(crate) fn from_sym_vec_address(v: SymVectorImpl<'ctx>) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::VecAddress(Rc::new(
       RefCell::new(v),
     ))))
@@ -2243,13 +2243,13 @@ impl<'ctx> SymVectorRef<'ctx> {
     // if idx >= c.len() {
     //   return Ok(NativeResult::err(cost, INDEX_OUT_OF_BOUNDS));
     // }
-    let (res, ty) = match c {
+    let (res, vector) = match c {
       VecU8(r)
       | VecU64(r)
       | VecU128(r)
       | VecBool(r)
       | VecAddress(r)
-      | Vec(r) => (r.borrow_mut().pop(), &r.borrow().element_type),
+      | Vec(r) => (r.borrow_mut().pop(), r.borrow()),
       
       Locals(_) | Struct(_) => unreachable!(),
     };
@@ -2259,7 +2259,7 @@ impl<'ctx> SymVectorRef<'ctx> {
       cost,
       vec![SymValue::from_ast_with_type(
         context.get_z3_ctx(),
-        res, ty,
+        res, &vector.element_type,
       )?],
     ))
   }
@@ -2781,12 +2781,31 @@ impl<'ctx> SymValue<'ctx> {
     })
   }
 
-  // TODO: not ok for now, sort out layout <=> type <=> typetag
-  // pub fn deserialize_constant(z3_ctx: &'ctx Context, constant: &Constant) -> Option<SymValue<'ctx>> {
-  //   let layout = Self::constant_sig_token_to_layout(&constant.type_)?;
-  //   let v = Value::simple_deserialize(&constant.data, &layout).ok()?;
-  //   SymValue::from_deserialized_value(z3_ctx, v, &layout).ok()
-  // }
+  fn constant_sig_token_to_tag(constant_signature: &SignatureToken) -> Option<TypeTag> {
+    use TypeTag as T;
+    use SignatureToken as S;
+
+    Some(match constant_signature {
+      S::Bool => T::Bool,
+      S::U8 => T::U8,
+      S::U64 => T::U64,
+      S::U128 => T::U128,
+      S::Address => T::Address,
+      S::Signer => return None,
+      S::Vector(inner) => T::Vector(Box::new(Self::constant_sig_token_to_tag(inner)?)),
+      // Not yet supported
+      S::Struct(_) | S::StructInstantiation(_, _) => return None,
+      // Not allowed/Not meaningful
+      S::TypeParameter(_) | S::Reference(_) | S::MutableReference(_) => return None,
+    })
+  }
+
+  pub fn deserialize_constant(z3_ctx: &'ctx Context, constant: &Constant) -> Option<SymValue<'ctx>> {
+    let layout = Self::constant_sig_token_to_layout(&constant.type_)?;
+    let tag = Self::constant_sig_token_to_tag(&constant.type_)?;
+    let v = Value::simple_deserialize(&constant.data, &layout)?;
+    SymValue::from_deserialized_value(z3_ctx, v, &tag).ok()
+  }
 
   // pub fn serialize_constant(type_: SignatureToken, value: Value) -> Option<Constant> {
   //   let ty = Self::constant_sig_token_to_type(&type_)?;

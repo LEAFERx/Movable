@@ -32,7 +32,7 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
 
   pub(crate) fn before_execute_instruction(
     &self,
-    plugin_context: &dyn PluginContext<'ctx>,
+    plugin_context: &mut dyn PluginContext<'ctx>,
     instruction: &Bytecode
   ) -> PartialVMResult<()>{
     for plugin in self.plugins.iter() {
@@ -43,19 +43,18 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
 
   pub(crate) fn before_call(
     &self,
-    loader: &Loader,
-    plugin_context: &dyn PluginContext<'ctx>,
+    plugin_context: &mut dyn PluginContext<'ctx>,
     func: &Function,
     ty_args: Vec<Type>,
   ) -> PartialVMResult<bool>{
     let mut result = false;
     for plugin in self.plugins.iter() {
-      result = result || plugin.on_before_call(loader, plugin_context, func, ty_args.clone())?;
+      result = result || plugin.on_before_call(plugin_context, func, ty_args.clone())?;
     }
     Ok(result)
   }
 
-  pub(crate) fn before_execute(&self) -> PartialVMResult<()> {
+  pub(crate) fn before_execute(&self) -> VMResult<()> {
     for plugin in self.plugins.iter() {
       plugin.on_before_execute()?;
     }
@@ -64,9 +63,9 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
 
   pub(crate) fn after_execute(
     &self,
-    plugin_context: &dyn PluginContext<'ctx>,
+    plugin_context: &mut dyn PluginContext<'ctx>,
     return_values: &[SymValue<'ctx>],
-  ) -> PartialVMResult<()> {
+  ) -> VMResult<()> {
     for plugin in self.plugins.iter() {
       plugin.on_after_execute(plugin_context, return_values)?;
     }

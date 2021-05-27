@@ -88,17 +88,16 @@ impl<'a, 'ctx> VerificationPlugin<'a, 'ctx> {
 impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
   fn on_before_call(
     &self,
-    _loader: &Loader,
-    plugin_ctx: &dyn PluginContext<'ctx>,
+    plugin_ctx: &mut dyn PluginContext<'ctx>,
     func: &Function,
     _ty_args: Vec<Type>,
   ) -> PartialVMResult<bool> {
     match self.specs.get(&Identifier::new(func.name()).unwrap())  {
       Some(spec) => {
+        let arg_count = func.arg_count();
+        let args = plugin_ctx.operand_stack_mut().popn(arg_count.try_into().unwrap())?;
         let z3_ctx = plugin_ctx.z3_ctx();
         let solver = plugin_ctx.solver();
-        let arg_count = func.arg_count();
-        let args = plugin_ctx.operand_stack().popn(arg_count.try_into().unwrap())?;
         solver.push();
         solver.assert(&spec.pre(args.as_slice()).as_inner().not());
         if solver.check() == SatResult::Sat {
@@ -123,9 +122,9 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
         let post_cond = spec.post(args.as_slice(), returns.as_slice());
         solver.assert(post_cond.as_inner());
         // TODO: consider if at here solver is unsat
-        plugin_ctx.spec_conditions().push((args, post_cond));
+        plugin_ctx.spec_conditions_mut().push((args, post_cond));
         for val in returns {
-          plugin_ctx.operand_stack().push(val)?;
+          plugin_ctx.operand_stack_mut().push(val)?;
         }
         Ok(true)
       }
@@ -137,10 +136,10 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
 
   fn on_after_execute(
     &self,
-    plugin_ctx: &dyn PluginContext<'ctx>,
+    plugin_ctx: &mut dyn PluginContext<'ctx>,
     // args: &[SymValue<'ctx>],
     return_values: &[SymValue<'ctx>],
-  ) -> PartialVMResult<()> {
+  ) -> VMResult<()> {
     let solver = plugin_ctx.solver();
     solver.push();
     solver.assert(self.target.post(&[], return_values).as_inner()); // TODO: args should not be empty!!
@@ -155,9 +154,11 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
     println!("Counter example found! See SUGGESTION and REPORT section.");
     println!("-------VERIFICATION END---------");
     solver.pop(1);
+    let path_conditions = plugin_ctx.path_conditions();
+    let spec_conditions = plugin_ctx.spec_conditions();
     let pc = Bool::and(self.z3_ctx,
-      &plugin_ctx.path_conditions().iter()
-        .chain(plugin_ctx.spec_conditions().iter().map(|(_, s)| s)).map(|v| v.as_inner())
+      &path_conditions.iter()
+        .chain(spec_conditions.iter().map(|(_, s)| s)).map(|v| v.as_inner())
         .collect::<Vec<_>>());
     for (spec_inputs, spec) in plugin_ctx.spec_conditions().iter() {
       let spec_vars = collect_variables(spec.as_inner());

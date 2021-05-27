@@ -6,19 +6,19 @@ use std::{
 };
 use engine::Engine;
 
-fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> CompiledModule {
-  let module_bytes = fs::read(bytecode_path).expect("Failed to open bytecode file");
-  CompiledModule::deserialize(module_bytes.as_slice())
-    .expect("Failed to read bytecode. File may be corrupted.")
+fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> Vec<u8> {
+  fs::read(bytecode_path).expect("Failed to open bytecode file")
 }
 
 fn exec(path: &str, func: &str) {
   env_logger::init();
   let path = Path::new(path);
   let function_name = IdentStr::new(func).unwrap();
-  let module = read_bytecode(path);
+  let blob = read_bytecode(path);
+  let module = CompiledModule::deserialize(blob.as_slice())
+    .expect("Failed to deserialize bytecode. File may be corrupted.");
   let mut engine = Engine::from_genesis();
-  engine.add_module(&module.self_id(), &module);
+  engine.add_module(&module.self_id(), blob);
   engine.execute_function(&module.self_id(), &function_name);
 }
 

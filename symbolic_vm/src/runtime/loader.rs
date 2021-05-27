@@ -1,7 +1,10 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::runtime::native_functions::NativeFunction;
+use crate::{
+  runtime::native_functions::NativeFunction,
+  types::data_store::SymDataStore,
+};
 use bytecode_verifier::{self, cyclic_dependencies, dependencies, script_signature};
 use diem_crypto::HashValue;
 use diem_infallible::Mutex;
@@ -15,7 +18,6 @@ use move_core_types::{
 };
 use move_vm_runtime::logging::{expect_no_verification_errors, LogContext};
 use move_vm_types::{
-  data_store::DataStore,
   loaded_data::runtime_types::{StructType, Type},
 };
 use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
@@ -443,11 +445,11 @@ impl Loader {
   // Entry point for script execution (`MoveVM::execute_script`).
   // Verifies the script if it is not in the cache of scripts loaded.
   // Type parameters are checked as well after every type is loaded.
-  pub(crate) fn load_script(
+  pub(crate) fn load_script<'ctx>(
     &self,
     script_blob: &[u8],
     ty_args: &[TypeTag],
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<(Arc<Function>, Vec<Type>, Vec<Type>)> {
     // retrieve or load the script
@@ -480,10 +482,10 @@ impl Loader {
   // So when publishing modules through the dependency DAG it may happen that a different
   // thread had loaded the module after this process fetched it from storage.
   // Caching will take care of that by asking for each dependency module again under lock.
-  fn deserialize_and_verify_script(
+  fn deserialize_and_verify_script<'ctx>(
     &self,
     script: &[u8],
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<CompiledScript> {
     let script = match CompiledScript::deserialize(script) {
@@ -548,13 +550,13 @@ impl Loader {
   // Entry point for function execution (`MoveVM::execute_function`).
   // Loading verifies the module if it was never loaded.
   // Type parameters are checked as well after every type is loaded.
-  pub(crate) fn load_function(
+  pub(crate) fn load_function<'ctx>(
     &self,
     function_name: &IdentStr,
     module_id: &ModuleId,
     ty_args: &[TypeTag],
     is_script_execution: bool,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<(Arc<Function>, Vec<Type>, Vec<Type>, Vec<Type>)> {
     let module = self.load_module_verify_not_missing(module_id, data_store, log_context)?;
@@ -603,10 +605,10 @@ impl Loader {
   // This step performs all verification steps to load the module without loading it.
   // The module is not added to the code cache. It is simply published to the data cache.
   // See `verify_script()` for script verification steps.
-  pub(crate) fn verify_module_for_publication(
+  pub(crate) fn verify_module_for_publication<'ctx>(
     &self,
     module: &CompiledModule,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<()> {
     // Performs all verification steps to load the module without loading it, i.e., the new
@@ -644,28 +646,28 @@ impl Loader {
     //   of publishing-one-module-at-a-time.
   }
 
-  fn verify_module_verify_no_missing_dependencies(
+  fn verify_module_verify_no_missing_dependencies<'ctx>(
     &self,
     module: &CompiledModule,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<()> {
     self.verify_module(module, data_store, true, log_context)
   }
 
-  fn verify_module_expect_no_missing_dependencies(
+  fn verify_module_expect_no_missing_dependencies<'ctx>(
     &self,
     module: &CompiledModule,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<()> {
     self.verify_module(module, data_store, false, log_context)
   }
 
-  fn verify_module(
+  fn verify_module<'ctx>(
     &self,
     module: &CompiledModule,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     verify_no_missing_modules: bool,
     log_context: &impl LogContext,
   ) -> VMResult<()> {
@@ -758,10 +760,10 @@ impl Loader {
   // Helpers for loading and verification
   //
 
-  fn load_type(
+  fn load_type<'ctx>(
     &self,
     type_tag: &TypeTag,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<Type> {
     Ok(match type_tag {
@@ -810,19 +812,19 @@ impl Loader {
   // So when publishing modules through the dependency DAG it may happen that a different
   // thread had loaded the module after this process fetched it from storage.
   // Caching will take care of that by asking for each dependency module again under lock.
-  fn load_module(
+  fn load_module<'ctx>(
     &self,
     id: &ModuleId,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     verify_module_is_not_missing: bool,
     log_context: &impl LogContext,
   ) -> VMResult<Arc<Module>> {
     // kept private to `load_module` to prevent verification errors from leaking
     // and not being marked as invariant violations
-    fn deserialize_and_verify_module(
+    fn deserialize_and_verify_module<'ctx>(
       loader: &Loader,
       bytes: Vec<u8>,
-      data_store: &mut impl DataStore,
+      data_store: &mut impl SymDataStore<'ctx>,
       log_context: &impl LogContext,
     ) -> VMResult<CompiledModule> {
       let module = CompiledModule::deserialize(&bytes).map_err(|_| {
@@ -863,30 +865,30 @@ impl Loader {
   }
 
   // Returns a verifier error if the module does not exist
-  fn load_module_verify_not_missing(
+  fn load_module_verify_not_missing<'ctx>(
     &self,
     id: &ModuleId,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<Arc<Module>> {
     self.load_module(id, data_store, true, log_context)
   }
 
   // Expects all modules to be on chain. Gives an invariant violation if it is not found
-  pub(crate) fn load_module_expect_not_missing(
+  pub(crate) fn load_module_expect_not_missing<'ctx>(
     &self,
     id: &ModuleId,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<Arc<Module>> {
     self.load_module(id, data_store, false, log_context)
   }
 
   // Returns a verifier error if the module does not exist
-  fn load_dependencies_verify_no_missing_dependencies(
+  fn load_dependencies_verify_no_missing_dependencies<'ctx>(
     &self,
     deps: Vec<ModuleId>,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<Vec<Arc<Module>>> {
     deps
@@ -896,10 +898,10 @@ impl Loader {
   }
 
   // Expects all modules to be on chain. Gives an invariant violation if it is not found
-  fn load_dependencies_expect_no_missing_dependencies(
+  fn load_dependencies_expect_no_missing_dependencies<'ctx>(
     &self,
     deps: Vec<ModuleId>,
-    data_store: &mut impl DataStore,
+    data_store: &mut impl SymDataStore<'ctx>,
     log_context: &impl LogContext,
   ) -> VMResult<Vec<Arc<Module>>> {
     deps
@@ -1086,6 +1088,13 @@ impl<'a> Resolver<'a> {
     Type::Struct(struct_def)
   }
 
+  pub(crate) fn get_struct_tag(&self, idx: StructDefinitionIndex) -> StructTag {
+    match self.type_to_type_tag(&self.get_struct_type(idx)).unwrap() {
+      TypeTag::Struct(tag) => tag,
+      _ => unreachable!()
+    }
+  }
+
   pub(crate) fn instantiate_generic_type(
     &self,
     idx: StructDefInstantiationIndex,
@@ -1103,6 +1112,17 @@ impl<'a> Resolver<'a> {
         .map(|ty| ty.subst(ty_args))
         .collect::<PartialVMResult<_>>()?,
     ))
+  }
+  
+  pub(crate) fn instantiate_generic_tag(
+    &self,
+    idx: StructDefInstantiationIndex,
+    ty_args: &[Type],
+  ) -> PartialVMResult<StructTag> {
+    match self.type_to_type_tag(&self.instantiate_generic_type(idx, ty_args)?)? {
+      TypeTag::Struct(tag) => Ok(tag),
+      _ => unreachable!(),
+    }
   }
 
   //
@@ -1142,7 +1162,7 @@ impl<'a> Resolver<'a> {
   }
 
   pub(crate) fn type_to_type_tag(&self, ty: &Type) -> PartialVMResult<TypeTag> {
-    self.loader().type_to_type_tag(ty)
+    self.loader.type_to_type_tag(ty)
   }
 
   pub(crate) fn loader(&self) -> &Loader {
@@ -1524,7 +1544,7 @@ enum Scope {
 
 // A runtime function
 #[derive(Debug)]
-pub(crate) struct Function {
+pub struct Function {
   file_format_version: u32,
   index: FunctionDefinitionIndex,
   code: Vec<Bytecode>,

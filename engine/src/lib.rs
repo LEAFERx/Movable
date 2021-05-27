@@ -6,9 +6,6 @@ use move_core_types::{
   identifier::{IdentStr, Identifier},
   language_storage::ModuleId,
 };
-use diem_vm::data_cache::StateViewCache;
-use move_vm_types::transaction_metadata::TransactionMetadata;
-use vm::CompiledModule;
 
 use serde::{Deserialize, Serialize};
 use z3::{Config, Context, ast::{Ast, BV, Bool, Dynamic}};
@@ -16,7 +13,6 @@ use z3::{Config, Context, ast::{Ast, BV, Bool, Dynamic}};
 use symbolic_vm::{
   plugin::{IntegerArithmeticPlugin, PluginManager, Specification, VerificationPlugin},
   runtime::vm::SymbolicVM,
-  state::vm_context::SymbolicVMContext,
   types::values::{SymValue, VMSymValueCast, SymU64, SymBool},
 };
 
@@ -51,25 +47,23 @@ impl Engine {
     engine
   }
 
-  pub fn add_module(&mut self, module_id: &ModuleId, module: &CompiledModule) {
-    self.data_store.add_module(module_id, module);
+  pub fn add_module(&mut self, module_id: &ModuleId, blob: Vec<u8>) {
+    self.data_store.add_module(module_id, blob);
   }
   
   pub fn execute_function(&self, module: &ModuleId, function_name: &IdentStr) {
     let config = Config::new();
     let context = Context::new(&config);
     let vm = SymbolicVM::new(&context);
-    let data_cache = BlockDataCache::new(&self.data_store);
-    let mut vm_ctx = SymbolicVMContext::new(&context, GasUnits::new(0), &data_cache);
-    let mut metadata = TransactionMetadata::default();
-    metadata.sender = AccountAddress::random();
+    let sender = AccountAddress::random();
+    let session = vm.new_session(&self.data_store);
 
     let z3_ctx = &context;
     let int_plugin = IntegerArithmeticPlugin::new();
     let target_spec = Specification::new(
       |_a: &[SymValue]| SymBool::from(z3_ctx, true),
       |_a: &[SymValue], r: &[SymValue]| {
-        VMSymValueCast::<SymBool>::cast(r[0].copy_value()).unwrap()
+        VMSymValueCast::<SymBool>::cast(r[0].copy_value().unwrap()).unwrap()
       },
       |_a: &[SymValue]| SymBool::from(z3_ctx, true)
     );
@@ -78,10 +72,9 @@ impl Engine {
       |_a: &[SymValue], r: &[SymValue]| {
         // TODO: bad type conversions and clones
         // TODO: figure it out
-        let ret = VMSymValueCast::<SymU64>::cast(r[0].copy_value()).unwrap();
+        let ret = VMSymValueCast::<SymU64>::cast(r[0].copy_value().unwrap()).unwrap();
         SymBool::from_ast(
           ret.as_inner().bvuge(&BV::from_u64(z3_ctx, 10, 64)),
-          vec![Dynamic::from_ast(ret.as_inner())],
         )
       },
       |_a: &[SymValue]| SymBool::from(z3_ctx, true)
@@ -91,15 +84,15 @@ impl Engine {
       |a: &[SymValue], r: &[SymValue]| {
         // TODO: bad type conversions and clones
         // TODO: figure it out
-        let arg = VMSymValueCast::<SymU64>::cast(a[0].copy_value()).unwrap();
-        let ret = VMSymValueCast::<SymU64>::cast(r[0].copy_value()).unwrap();
+        let arg = VMSymValueCast::<SymU64>::cast(a[0].copy_value().unwrap()).unwrap();
+        let ret = VMSymValueCast::<SymU64>::cast(r[0].copy_value().unwrap()).unwrap();
         let const_ten = BV::from_u64(z3_ctx, 10, 64);
         let arg_ast = arg.as_inner();
         let ret_ast = ret.as_inner();
         let cond_pos = arg_ast.bvuge(&const_ten).implies(&ret_ast._eq(&arg_ast));
         let cond_neg = arg_ast.bvult(&const_ten).implies(&ret_ast._eq(&const_ten.bvsub(&arg_ast)));
         let cond = Bool::and(z3_ctx, &[&cond_pos, &cond_neg]);
-        SymBool::from_ast(cond, vec![Dynamic::from_ast(arg_ast), Dynamic::from_ast(ret_ast)]) // TODO: Should not be vec![]
+        SymBool::from_ast(cond)
       },
       |_a: &[SymValue]| SymBool::from(z3_ctx, true)
     );
@@ -113,8 +106,8 @@ impl Engine {
     let mut plugin_manager = PluginManager::new();
     plugin_manager.add_plugin(int_plugin);
     plugin_manager.add_plugin(verification_plugin);
-  
-    vm.execute_function(module, function_name, &mut vm_ctx, &metadata, &mut plugin_manager)
-      .expect("VM should run correctly");
+
+    session.execute_function(&mut plugin_manager, module, function_name, vec![])
+      .expect("VM should run correctly")
   }
 }

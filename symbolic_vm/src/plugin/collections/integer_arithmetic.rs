@@ -1,10 +1,9 @@
 use crate::{
   plugin::{Plugin, PluginContext},
-  runtime::interpreter::SymInterpreter,
   types::values::SymIntegerValue,
 };
 
-use move_core_types::vm_status::{StatusCode, VMStatus};
+use move_core_types::vm_status::StatusCode;
 
 use vm::{
   errors::*,
@@ -24,15 +23,14 @@ impl IntegerArithmeticPlugin {
 impl<'ctx> Plugin<'ctx> for IntegerArithmeticPlugin {
   fn on_before_execute_instrcution<'vtxn>(
     &self,
-    plugin_ctx: &dyn PluginContext<'ctx>,
+    plugin_ctx: &mut dyn PluginContext<'ctx>,
     instruction: &Bytecode
   ) -> PartialVMResult<()>{
-    let solver = &plugin_ctx.solver();
     match instruction {
       Bytecode::Add => {
-        solver.push();
-        let lhs = plugin_ctx.operand_stack().pop_as::<SymIntegerValue>()?;
-        let rhs = plugin_ctx.operand_stack().pop_as::<SymIntegerValue>()?;
+        plugin_ctx.solver().push();
+        let lhs = plugin_ctx.operand_stack_mut().pop_as::<SymIntegerValue>()?;
+        let rhs = plugin_ctx.operand_stack_mut().pop_as::<SymIntegerValue>()?;
         let (bv_l, bv_r) = match (&lhs, &rhs) {
           (SymIntegerValue::U8(l), SymIntegerValue::U8(r)) => {
             Ok((l.as_inner(), r.as_inner()))
@@ -49,17 +47,17 @@ impl<'ctx> Plugin<'ctx> for IntegerArithmeticPlugin {
           }
         }?;
         let result = bv_l.bvadd_no_overflow(bv_r, false).not();
-        solver.assert(&result);
-        match solver.check() {
+        plugin_ctx.solver().assert(&result);
+        match plugin_ctx.solver().check() {
           SatResult::Sat => {
             // let model = solver.get_model();
             println!("Add Overflow!");
           }
           _ => {}
         }
-        plugin_ctx.operand_stack().push(rhs.into_value())?;
-        plugin_ctx.operand_stack().push(lhs.into_value())?;
-        solver.pop(1);
+        plugin_ctx.operand_stack_mut().push(rhs.into_value())?;
+        plugin_ctx.operand_stack_mut().push(lhs.into_value())?;
+        plugin_ctx.solver().pop(1);
       }
       Bytecode::Sub => {
       }
@@ -67,9 +65,9 @@ impl<'ctx> Plugin<'ctx> for IntegerArithmeticPlugin {
 
       }
       Bytecode::Div | Bytecode::Mod => {
-        solver.push();
+        plugin_ctx.solver().push();
 
-        solver.pop(1);
+        plugin_ctx.solver().pop(1);
       }
       _ => {}
     }

@@ -23,16 +23,14 @@ struct Args {
   pub func: String,
 }
 
-fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> CompiledModule {
+fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> Vec<u8> {
   // let bytecode_file = File::open(bytecode_path).expect("Failed to open bytecode file");
   // let bytecode_reader = BufReader::new(bytecode_file);
   // let bytecode_json: Module = serde_json::from_reader(bytecode_reader)
   //   .expect("Failed to parse json format. File may be corrupted.");
   // CompiledModule::deserialize(&bytecode_json.code())
   //   .expect("Failed to read bytecode. File may be corrupted.")
-  let module_bytes = fs::read(bytecode_path).expect("Failed to open bytecode file");
-  CompiledModule::deserialize(module_bytes.as_slice())
-    .expect("Failed to read bytecode. File may be corrupted.")
+  fs::read(bytecode_path).expect("Failed to open bytecode file")
 }
 
 fn main() {
@@ -42,9 +40,11 @@ fn main() {
   let path = Path::new(&args.source);
   let function_name = IdentStr::new(args.func.as_str()).unwrap();
 
-  let module = read_bytecode(path);
+  let blob = read_bytecode(path);
+  let module = CompiledModule::deserialize(blob.as_slice())
+    .expect("Failed to deserialize bytecode. File may be corrupted.");
 
   let mut engine = Engine::from_genesis();
-  engine.add_module(&module.self_id(), &module);
+  engine.add_module(&module.self_id(), blob);
   engine.execute_function(&module.self_id(), &function_name);
 }

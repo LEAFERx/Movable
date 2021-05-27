@@ -124,7 +124,6 @@ impl NativeFunction {
 pub(crate) struct SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
   z3_ctx: &'ctx Context,
   interpreter: &'a mut SymInterpreter<'ctx, 'r, 'l, R>,
-  data_store: &'a mut dyn SymDataStore<'ctx>,
   // cost_strategy: &'a ...
   resolver: &'a Resolver<'l>,
 }
@@ -132,13 +131,11 @@ pub(crate) struct SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
 impl<'a, 'ctx, 'r, 'l, R: RemoteCache> SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
   pub(crate) fn new(
     interpreter: &'a mut SymInterpreter<'ctx, 'r, 'l, R>,
-    data_store: &'a mut dyn SymDataStore<'ctx>,
     resolver: &'a Resolver<'l>,
   ) -> Self {
     SymFunctionContext {
-      z3_ctx: data_store.get_z3_ctx(),
+      z3_ctx: interpreter.data_cache().get_z3_ctx(),
       interpreter,
-      data_store,
       resolver,
     }
   }
@@ -167,7 +164,7 @@ impl<'a, 'ctx, 'r, 'l, R: RemoteCache> SymNativeContext<'ctx> for SymFunctionCon
     ty: Type,
     val: SymValue<'ctx>,
   ) -> PartialVMResult<bool> {
-    match self.data_store.emit_event(guid, seq_num, ty, val) {
+    match self.interpreter.data_cache().emit_event(guid, seq_num, ty, val) {
       Ok(()) => Ok(true),
       Err(e) if e.major_status().status_type() == StatusType::InvariantViolation => Err(e),
       Err(_) => Ok(false),
