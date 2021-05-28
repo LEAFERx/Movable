@@ -28,6 +28,9 @@ use vm::errors::PartialVMResult;
 use crate::types::values::SymValue;
 use z3::Context;
 
+pub use move_core_types::vm_status::StatusCode;
+pub use vm::errors::PartialVMError;
+
 /// `SymNativeContext` - Symbolic Native function context.
 ///
 /// This is the API, the "privileges", a native function is given.
@@ -42,12 +45,12 @@ pub trait SymNativeContext<'ctx> {
   /// Gets cost table ref.
   // fn cost_table(&self) -> &CostTable;
   /// Saves contract event. Returns true if successful
-    fn save_event(
-      &mut self,
-      guid: Vec<u8>,
-      count: u64,
-      ty: Type,
-      val: SymValue<'ctx>,
+  fn save_event(
+    &mut self,
+    guid: Vec<u8>,
+    count: u64,
+    ty: Type,
+    val: SymValue<'ctx>,
   ) -> PartialVMResult<bool>;
   /// Get the a type tag via the type.
   fn type_to_type_tag(&self, ty: &Type) -> PartialVMResult<Option<TypeTag>>;
@@ -111,12 +114,12 @@ pub fn native_gas(
 #[macro_export]
 macro_rules! pop_arg {
   ($arguments:ident, $t:ty) => {{
-    use $crate::natives::function::{NativeResult, PartialVMError, StatusCode};
+    use $crate::types::natives::{PartialVMError, StatusCode};
     match $arguments.pop_back().map(|v| v.value_as::<$t>()) {
       None => {
-          return Err(PartialVMError::new(
-              StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
-          ))
+        return Err(PartialVMError::new(
+          StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
+        ))
       }
       Some(Err(e)) => return Err(e),
       Some(Ok(v)) => v,

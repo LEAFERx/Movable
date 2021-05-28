@@ -1,69 +1,43 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use diem_types::{
-    account_address::AccountAddress,
-    account_config,
-    account_config::{AccountResource, BalanceResource, CORE_CODE_ADDRESS},
-    vm_error::{StatusCode, VMStatus},
-};
-use move_core_types::move_resource::MoveResource;
+use move_core_types::gas_schedule::{InternalGasUnits, GasAlgebra};
 use move_vm_types::{
-    gas_schedule::NativeCostIndex,
-    loaded_data::runtime_types::Type,
-    natives::function::{native_gas, NativeContext, NativeResult},
-    values::{Struct, Value},
+  gas_schedule::NativeCostIndex,
+  loaded_data::runtime_types::Type,
 };
 use std::collections::VecDeque;
-use vm::errors::VMResult;
+use vm::errors::PartialVMResult;
 
-pub fn native_save_account(
-    context: &mut impl NativeContext,
-    ty_args: Vec<Type>,
-    mut arguments: VecDeque<Value>,
-) -> PartialVMResult<NativeResult> {
-    debug_assert!(ty_args.len() == 2);
-    debug_assert!(arguments.len() == 5);
+use crate::pop_arg;
+use crate::types::{
+  natives::{native_gas, SymNativeContext, SymNativeResult},
+  values::{SymAccountAddress, SymValue},
+};
 
-    let address = pop_arg!(arguments, AccountAddress);
-    let event_generator = pop_arg!(arguments, Struct);
-    let account = pop_arg!(arguments, Struct);
-    let balance = pop_arg!(arguments, Struct);
-    let account_type = pop_arg!(arguments, Struct);
+pub fn native_create_signer<'ctx>(
+  _context: &mut impl SymNativeContext<'ctx>,
+  ty_args: Vec<Type>,
+  mut arguments: VecDeque<SymValue<'ctx>>,
+) -> PartialVMResult<SymNativeResult<'ctx>> {
+  debug_assert!(ty_args.is_empty());
+  debug_assert!(arguments.len() == 1);
 
-    if address == CORE_CODE_ADDRESS {
-        return Err(PartialVMError::new(StatusCode::CREATE_NULL_ACCOUNT));
-    }
+  let address = pop_arg!(arguments, SymAccountAddress);
+  // let cost = native_gas(context.cost_table(), NativeCostIndex::CREATE_SIGNER, 0);
+  let cost = InternalGasUnits::new(0);
+  Ok(SymNativeResult::ok(cost, vec![SymValue::sym_signer(address)]))
+}
 
-    let cost = native_gas(context.cost_table(), NativeCostIndex::SAVE_ACCOUNT, 0);
+pub fn native_destroy_signer<'ctx>(
+  _context: &mut impl SymNativeContext<'ctx>,
+  ty_args: Vec<Type>,
+  arguments: VecDeque<SymValue<'ctx>>,
+) -> PartialVMResult<SymNativeResult<'ctx>> {
+  debug_assert!(ty_args.is_empty());
+  debug_assert!(arguments.len() == 1);
 
-    context.save_under_address(
-        &[],
-        &account_config::EVENT_MODULE,
-        account_config::event_handle_generator_struct_name(),
-        event_generator,
-        address,
-    )?;
-    context.save_under_address(
-        &[],
-        &account_config::ACCOUNT_MODULE,
-        &AccountResource::struct_identifier(),
-        account,
-        address,
-    )?;
-    context.save_under_address(
-        &[ty_args[0].clone()],
-        &account_config::ACCOUNT_MODULE,
-        &BalanceResource::struct_identifier(),
-        balance,
-        address,
-    )?;
-    context.save_under_address(
-        &[ty_args[1].clone()],
-        &account_config::ACCOUNT_TYPE_MODULE,
-        account_config::account_type_struct_name(),
-        account_type,
-        address,
-    )?;
-    Ok(NativeResult::ok(cost, vec![]))
+  // let cost = native_gas(context.cost_table(), NativeCostIndex::DESTROY_SIGNER, 0);
+  let cost = InternalGasUnits::new(0);
+  Ok(SymNativeResult::ok(cost, vec![]))
 }

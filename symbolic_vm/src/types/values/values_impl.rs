@@ -1363,7 +1363,7 @@ impl<'ctx> SymSignerRef<'ctx> {
  *
  **************************************************************************************/
 impl<'ctx> SymLocals<'ctx> {
-  pub fn new(z3_ctx: &'ctx Context, n: usize) -> Self {
+  pub fn new(_z3_ctx: &'ctx Context, n: usize) -> Self {
     Self(Rc::new(RefCell::new(
       iter::repeat_with(|| SymValueImpl::Invalid).take(n).collect(),
     )))
@@ -2332,7 +2332,7 @@ impl<'ctx> SymVector<'ctx> {
     Ok(SymNativeResult::ok(cost, vec![container]))
   }
 
-  pub fn destory_empty(
+  pub fn destroy_empty(
     self,
     cost: InternalGasUnits<GasCarrier>,
     type_param: &Type,

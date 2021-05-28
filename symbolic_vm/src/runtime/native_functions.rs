@@ -8,10 +8,13 @@ use move_core_types::{
   value::MoveTypeLayout, vm_status::StatusType,
 };
 // use move_vm_natives::{account, event, hash, lcs, signature};
-use crate::types::{
-  data_store::SymDataStore,
-  natives::{SymNativeContext, SymNativeResult},
-  values::SymValue,
+use crate::{
+  natives::{account, signer, vector},
+  types::{
+    data_store::SymDataStore,
+    natives::{SymNativeContext, SymNativeResult},
+    values::SymValue,
+  },
 };
 use move_vm_types::{
   loaded_data::runtime_types::Type,
@@ -95,28 +98,28 @@ impl NativeFunction {
       // Self::HashSha3_256 => hash::native_sha3_256(ctx, t, v),
       // Self::PubED25519Validate => signature::native_ed25519_publickey_validation(ctx, t, v),
       // Self::SigED25519Verify => signature::native_ed25519_signature_verification(ctx, t, v),
-      // Self::VectorLength => vector::native_length(ctx, t, v),
-      // Self::VectorEmpty => vector::native_empty(ctx, t, v),
-      // Self::VectorBorrow => vector::native_borrow(ctx, t, v),
-      // Self::VectorBorrowMut => vector::native_borrow(ctx, t, v),
-      // Self::VectorPushBack => vector::native_push_back(ctx, t, v),
-      // Self::VectorPopBack => vector::native_pop(ctx, t, v),
-      // Self::VectorDestroyEmpty => vector::native_destroy_empty(ctx, t, v),
-      // Self::VectorSwap => vector::native_swap(ctx, t, v),
+      Self::VectorLength => vector::native_length(ctx, t, v),
+      Self::VectorEmpty => vector::native_empty(ctx, t, v),
+      Self::VectorBorrow => vector::native_borrow(ctx, t, v),
+      Self::VectorBorrowMut => vector::native_borrow(ctx, t, v),
+      Self::VectorPushBack => vector::native_push_back(ctx, t, v),
+      Self::VectorPopBack => vector::native_pop(ctx, t, v),
+      Self::VectorDestroyEmpty => vector::native_destroy_empty(ctx, t, v),
+      Self::VectorSwap => vector::native_swap(ctx, t, v),
       // // natives that need the full API of `NativeContext`
       // Self::AccountWriteEvent => event::native_emit_event(ctx, t, v),
       // Self::BCSToBytes => bcs::native_to_bytes(ctx, t, v),
       // Self::DebugPrint => debug::native_print(ctx, t, v),
       // Self::DebugPrintStackTrace => debug::native_print_stack_trace(ctx, t, v),
-      // Self::SignerBorrowAddress => signer::native_borrow_address(ctx, t, v),
-      // Self::CreateSigner => account::native_create_signer(ctx, t, v),
-      // Self::DestroySigner => account::native_destroy_signer(ctx, t, v),
+      Self::SignerBorrowAddress => signer::native_borrow_address(ctx, t, v),
+      Self::CreateSigner => account::native_create_signer(ctx, t, v),
+      Self::DestroySigner => account::native_destroy_signer(ctx, t, v),
       _ => Ok(SymNativeResult::ok(InternalGasUnits::new(0), vec![]))
     };
-    // debug_assert!(match &result {
-    //   Err(e) => e.major_status().status_type() == StatusType::InvariantViolation,
-    //   Ok(_) => true,
-    // });
+    debug_assert!(match &result {
+      Err(e) => e.major_status().status_type() == StatusType::InvariantViolation,
+      Ok(_) => true,
+    });
     result
   }
 }
