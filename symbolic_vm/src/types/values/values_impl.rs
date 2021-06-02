@@ -360,15 +360,30 @@ macro_rules! set_local_by_idx {
 impl<'ctx> SymStructImpl<'ctx> {
   fn new(
     z3_ctx: &'ctx Context,
-    struct_type: StructTag,
+    struct_type: &StructTag,
     fields: &[&Dynamic<'ctx>],
   ) -> Self {
     let datatype = struct_tag_to_datatype_sort(z3_ctx, &struct_type);
     let data = datatype.variants[0].constructor.apply(fields).as_datatype().unwrap();
     SymStructImpl {
       z3_ctx,
-      struct_type,
+      struct_type: struct_type.clone(),
       datatype: Rc::new(RefCell::new(datatype)),
+      data,
+    }
+  }
+
+  fn new_ast(
+    z3_ctx: &'ctx Context,
+    prefix: &str,
+    struct_type: &StructTag,
+  ) -> Self {
+    let dsort = struct_tag_to_datatype_sort(z3_ctx, &struct_type);
+    let data = Datatype::fresh_const(z3_ctx, prefix, &dsort.sort);
+    Self {
+      z3_ctx,
+      struct_type: struct_type.clone(),
+      datatype: Rc::new(RefCell::new(dsort)),
       data,
     }
   }
@@ -464,7 +479,7 @@ impl<'ctx> SymStructImpl<'ctx> {
     let field_refs = fields.iter().collect::<Vec<_>>();
     Ok(Self::new(
       z3_ctx,
-      struct_type.clone(),
+      &struct_type,
       field_refs.as_slice(),
     ))
   }
@@ -553,6 +568,22 @@ impl<'ctx> SymVectorImpl<'ctx> {
       z3_ctx,
       element_type: element_type.clone(),
       datatype: Rc::new(RefCell::new(vector_datatypesort)),
+      data,
+    }
+  }
+
+  fn new_ast(
+    z3_ctx: &'ctx Context,
+    prefix: &str,
+    element_type: &TypeTag,
+  ) -> Self {
+    let dsort = vec_to_datatype_sort(z3_ctx, element_type);
+    let data = Datatype::fresh_const(z3_ctx, prefix, &dsort.sort);
+
+    Self {
+      z3_ctx,
+      element_type: element_type.clone(),
+      datatype: Rc::new(RefCell::new(dsort)),
       data,
     }
   }
@@ -1579,6 +1610,25 @@ impl<'ctx> SymValue<'ctx> {
 
   pub fn new_bool(z3_ctx: &'ctx Context, prefix: &str) -> Self {
     SymValue(SymValueImpl::Bool(SymBool::new(z3_ctx, prefix)))
+  }
+
+  pub fn new_vector(z3_ctx: &'ctx Context, prefix: &str, vtag: &TypeTag) -> Self {
+    let v = SymVectorImpl::new_ast(z3_ctx, prefix, vtag);
+    let container = match vtag {
+      TypeTag::Address | TypeTag::Signer => panic!("Should not symbolize address"),
+      TypeTag::Bool => SymContainer::VecBool(Rc::new(RefCell::new(v))),
+      TypeTag::U8 => SymContainer::VecU8(Rc::new(RefCell::new(v))),
+      TypeTag::U64 => SymContainer::VecU8(Rc::new(RefCell::new(v))),
+      TypeTag::U8 => SymContainer::VecU8(Rc::new(RefCell::new(v))),
+      _ => SymContainer::Vec(Rc::new(RefCell::new(v)))
+    };
+    SymValue(SymValueImpl::Container(container))
+  }
+
+  pub fn new_struct(z3_ctx: &'ctx Context, prefix: &str, stag: &StructTag) -> Self {
+    SymValue(SymValueImpl::Container(SymContainer::Struct(Rc::new(RefCell::new(
+      SymStructImpl::new_ast(z3_ctx, prefix, stag),
+    )))))
   }
 
   pub fn from_address(z3_ctx: &'ctx Context, address: AccountAddress) -> Self {

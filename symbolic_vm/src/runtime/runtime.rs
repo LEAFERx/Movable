@@ -15,7 +15,7 @@ use crate::{
   runtime::{
     data_cache::SymDataCache,
     interpreter::{
-      SymInterpreter, SymInterpreterExecutionResult
+      SymInterpreter, SymInterpreterExecutionResult, ExecutionReport,
     },
     loader::Loader,
   },
@@ -158,7 +158,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub fn execute_function(
     &self,
     z3_ctx: &'ctx Context,
-    plugin_manager: &mut PluginManager<'_, 'ctx>,
+    plugin_manager: &PluginManager<'_, 'ctx>,
     // gas_schedule: &CostTable,
     module: &ModuleId,
     function_name: &IdentStr,
@@ -185,7 +185,6 @@ impl<'ctx> VMRuntime<'ctx> {
       ty_args,
       args_cloned,
       data_cache,
-      &self.loader,
     )?;
 
     let args: PartialVMResult<Vec<_>> = args.into_iter().map(|v| v.as_ast()).collect();
@@ -201,18 +200,29 @@ impl<'ctx> VMRuntime<'ctx> {
               interp_stack.push(interp);
             }
           }
-          SymInterpreterExecutionResult::Report(model, return_values) => {
-            println!("-------REPORT BEGIN-------");
-            println!("Args:");
-            for (idx, val) in args.iter().enumerate() {
-              println!("Index {}: {:#?}", idx, model.eval(val));
+          SymInterpreterExecutionResult::Report(report) => {
+            match report {
+              ExecutionReport::Returned(model, return_values) => {
+                println!("-------REPORT BEGIN-------");
+                println!("Function returned without abortion.");
+                println!("Args:");
+                for (idx, val) in args.iter().enumerate() {
+                  println!("Index {}: {:#?}", idx, model.eval(val));
+                }
+                println!("Returns:");
+                for (idx, val) in return_values.into_iter().enumerate() {
+                  let ast = val.as_ast().map_err(|e| e.finish(Location::Undefined))?;
+                  println!("Index {}: {:#?}", idx, model.eval(&ast));
+                }
+                println!("-------REPORT END---------");
+              },
+              ExecutionReport::Aborted(code) => {
+                println!("-------REPORT BEGIN-------");
+                println!("Function aborted.");
+                println!("Code: {:?}", code);
+                println!("-------REPORT END---------");
+              }
             }
-            println!("Returns:");
-            for (idx, val) in return_values.into_iter().enumerate() {
-              let ast = val.as_ast().map_err(|e| e.finish(Location::Undefined))?;
-              println!("Index {}: {:#?}", idx, model.eval(&ast));
-            }
-            println!("-------REPORT END---------");
           }
         }
       } else {
@@ -222,7 +232,7 @@ impl<'ctx> VMRuntime<'ctx> {
     Ok(())
   }
 
-  pub fn load_function(
+  pub(crate) fn load_function(
     &self,
     module: &ModuleId,
     function_name: &IdentStr,
@@ -237,5 +247,9 @@ impl<'ctx> VMRuntime<'ctx> {
       data_cache,
       &NoContextLog::new(),
     )
+  }
+
+  pub(crate) fn type_to_type_tag(&self, ty: &Type) -> PartialVMResult<TypeTag> {
+    self.loader.type_to_type_tag(ty)
   }
 }

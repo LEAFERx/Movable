@@ -30,3 +30,4 @@ z3 = "0.10.0"
 # z3 = { path = "/root/z3.rs/z3" }
 
 engine = { path = "./engine", package = "movable-engine" }
+symbolic_vm = { path = "./symbolic_vm", package = "movable-symbolic-vm" }

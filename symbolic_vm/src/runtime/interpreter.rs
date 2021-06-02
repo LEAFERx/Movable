@@ -100,7 +100,6 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
     args: Vec<SymValue<'ctx>>,
     data_cache: SymDataCache<'ctx, 'r, 'l, R>,
     // cost_strategy: &mut 
-    loader: &'l Loader,
   ) -> VMResult<Self> {
     let mut interp = Self::new(z3_ctx, data_cache);
     
@@ -161,7 +160,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   pub(crate) fn execute(
     mut self,
     loader: &'l Loader,
-    manager: &mut PluginManager<'_, 'ctx>,
+    manager: &PluginManager<'_, 'ctx>,
   ) -> VMResult<SymInterpreterExecutionResult<'ctx, 'r, 'l, R>> {
     if let Some(mut current_frame) = self.call_stack.pop() {
       loop {
@@ -186,10 +185,11 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               }
               manager.after_execute(&mut self, return_values.as_slice())?;
               self.solver.check(); // TODO: avoid unchecked get_model
-              return Ok(SymInterpreterExecutionResult::Report(
-                self.solver.get_model().expect("No Model Avaliable"), return_values));
+              return Ok(SymInterpreterExecutionResult::Report(ExecutionReport::Returned(
+                self.solver.get_model().expect("No Model Avaliable"), return_values)
+              ));
             }
-          }
+          },
           ExitCode::Call(fh_idx) => {
             let func = resolver.function_from_handle(fh_idx);
             let should_skip = manager
@@ -213,7 +213,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               self.maybe_core_dump(err, &frame)
             })?;
             current_frame = frame;
-          }
+          },
           ExitCode::CallGeneric(idx) => {
             let arity = resolver.type_params_count(idx);
             let ty_args = resolver
@@ -247,7 +247,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               self.maybe_core_dump(err, &frame)
             })?;
             current_frame = frame;
-          }
+          },
           ExitCode::Branch(instr, condition, offset) => {
             println!(
               "Hit Br{{{:?}}} instr, condition is {:?}, target offset is {:?}",
@@ -295,7 +295,10 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               forks.push(forked_interp);
             }
             return Ok(SymInterpreterExecutionResult::Fork(forks));
-          }
+          },
+          ExitCode::CatchedAbort(code) => {
+            return Ok(SymInterpreterExecutionResult::Report(ExecutionReport::Aborted(code)));
+          },
         }
       }
     } else {
@@ -596,7 +599,12 @@ impl<'ctx, 'r, 'l, R: RemoteCache> PluginContext<'ctx> for SymInterpreter<'ctx, 
 
 pub enum SymInterpreterExecutionResult<'ctx, 'r, 'l, R> {
   Fork(Vec<SymInterpreter<'ctx, 'r, 'l, R>>),
-  Report(Model<'ctx>, Vec<SymValue<'ctx>>)
+  Report(ExecutionReport<'ctx>)
+}
+
+pub enum ExecutionReport<'ctx> {
+  Returned(Model<'ctx>, Vec<SymValue<'ctx>>),
+  Aborted(SymU64<'ctx>),
 }
 
 // TODO Determine stack size limits based on gas limit
@@ -712,6 +720,7 @@ enum ExitCode<'ctx> {
   /// A `BrTrue / BrFalse` opcode was found.
   /// BrTrue / BrFalse, condition , offset
   Branch(bool, SymBool<'ctx>, CodeOffset),
+  CatchedAbort(SymU64<'ctx>),
 }
 
 impl<'ctx> SymFrame<'ctx> {
@@ -738,7 +747,7 @@ impl<'ctx> SymFrame<'ctx> {
     &mut self,
     resolver: &Resolver,
     interpreter: &mut SymInterpreter<'ctx, 'r, 'l, R>,
-    manager: &mut PluginManager<'_, 'ctx>
+    manager: &PluginManager<'_, 'ctx>
   ) -> VMResult<ExitCode<'ctx>> {
     self.execute_code_impl(resolver, interpreter, manager)
       .map_err(|e| {
@@ -751,7 +760,7 @@ impl<'ctx> SymFrame<'ctx> {
     &mut self,
     resolver: &Resolver,
     interpreter: &mut SymInterpreter<'ctx, 'r, 'l, R>,
-    manager: &mut PluginManager<'_, 'ctx>
+    manager: &PluginManager<'_, 'ctx>
   ) -> PartialVMResult<ExitCode<'ctx>> {
     let code = self.function.code();
     loop {
@@ -1066,27 +1075,7 @@ impl<'ctx> SymFrame<'ctx> {
           Bytecode::Abort => {
             // gas!(const_instr: context, interpreter, Opcodes::ABORT)?;
             let sym_error_code = interpreter.operand_stack.pop_as::<SymU64>()?;
-            let error_code = sym_error_code.as_inner().as_u64();
-            return match error_code {
-              Some(code) => Err(
-                PartialVMError::new(StatusCode::ABORTED)
-                  .with_sub_status(code)
-                  .with_message(format!(
-                    "{} at offset {}",
-                    self.function.pretty_string(),
-                    self.pc,
-                  )),
-              ),
-              None => {
-                let msg = format!(
-                  "With Symbolic Error Code {:?}, {} at offset {}",
-                  sym_error_code,
-                  self.function.pretty_string(),
-                  self.pc,
-                );
-                Err(PartialVMError::new(StatusCode::ABORTED).with_message(msg))
-              }
-            };
+            return Ok(ExitCode::CatchedAbort(sym_error_code));
           }
           Bytecode::Eq => {
             let lhs = interpreter.operand_stack.pop()?;

@@ -18,9 +18,11 @@ use z3::{Context, Solver};
 pub trait PluginContext<'ctx> {
   fn z3_ctx(&self) -> &'ctx Context;
   fn solver(&self) -> &Solver<'ctx>;
+
   fn operand_stack(&self) -> &SymStack<'ctx>;
   fn path_conditions(&self) -> &Vec<SymBool<'ctx>>;
   fn spec_conditions(&self) -> &Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)>;
+  
   fn operand_stack_mut(&mut self) -> &mut SymStack<'ctx>;
   fn path_conditions_mut(&mut self) -> &mut Vec<SymBool<'ctx>>;
   fn spec_conditions_mut(&mut self) -> &mut Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)>;

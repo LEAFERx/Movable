@@ -34,7 +34,7 @@ pub struct Session<'ctx, 'r, 'l, R> {
 impl<'ctx, 'r, 'l, R: RemoteCache> Session<'ctx, 'r, 'l, R> {
   pub fn execute_function(
     mut self,
-    plugin_manager: &mut PluginManager<'_, 'ctx>,
+    plugin_manager: &PluginManager<'_, 'ctx>,
     module: &ModuleId,
     function_name: &IdentStr,
     ty_args: Vec<TypeTag>,
@@ -74,7 +74,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> Session<'ctx, 'r, 'l, R> {
     ty_args: &[TypeTag],
   ) -> VMResult<Vec<SymValue<'ctx>>> {
     let z3_ctx = self.z3_ctx;
-    let (func, _, _, _) = self.runtime.load_function(
+    let (func, _, parameter_tys, _) = self.runtime.load_function(
       module,
       function_name,
       ty_args,
@@ -82,8 +82,8 @@ impl<'ctx, 'r, 'l, R: RemoteCache> Session<'ctx, 'r, 'l, R> {
     )?;
     let mut args = vec![];
     let prefix = "TestFuncArgs";
-    for sig in &func.parameters().0 {
-      let val = match sig {
+    for ty in parameter_tys {
+      let val = match ty {
         SignatureToken::Bool => SymValue::new_bool(z3_ctx, prefix),
         SignatureToken::U8 => SymValue::new_u8(z3_ctx, prefix),
         SignatureToken::U64 => SymValue::new_u64(z3_ctx, prefix),

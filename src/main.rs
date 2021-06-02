@@ -13,6 +13,7 @@ use std::{
 };
 use structopt::StructOpt;
 
+use z3::{Config, Context};
 use engine::Engine;
 
 #[derive(Debug, StructOpt)]
@@ -44,7 +45,10 @@ fn main() {
   let module = CompiledModule::deserialize(blob.as_slice())
     .expect("Failed to deserialize bytecode. File may be corrupted.");
 
-  let mut engine = Engine::from_genesis();
+  let z3_cfg = Config::new();
+  let z3_ctx = Context::new(&z3_cfg);
+
+  let mut engine = Engine::from_genesis(&z3_ctx);
   engine.add_module(&module.self_id(), blob);
   engine.execute_function(&module.self_id(), &function_name);
 }
