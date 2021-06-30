@@ -18,7 +18,7 @@ use crate::{
 };
 
 pub fn native_borrow_address<'ctx>(
-  _context: &impl SymNativeContext<'ctx>,
+  context: &impl SymNativeContext<'ctx>,
   _ty_args: Vec<Type>,
   mut arguments: VecDeque<SymValue<'ctx>>,
 ) -> PartialVMResult<SymNativeResult<'ctx>> {
@@ -31,6 +31,6 @@ pub fn native_borrow_address<'ctx>(
 
   Ok(SymNativeResult::ok(
       cost,
-      vec![signer_reference.borrow_signer()?],
+      vec![signer_reference.borrow_signer(context.get_ty_ctx())?],
   ))
 }

@@ -6,9 +6,9 @@ use move_core_types::vm_status::StatusCode;
 use std::convert::TryInto;
 use z3::{
   ast::{Ast, BV, Dynamic},
+  Context,
 };
 use crate::{
-  runtime::context::Context,
   types::values::{
     primitives::SymBool,
     SymbolicMoveValue,
@@ -17,30 +17,23 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct SymAccountAddress<'ctx> {
-  ctx: &'ctx Context<'ctx>,
   ast: BV<'ctx>,
 }
 
 impl<'ctx> SymAccountAddress<'ctx> {
   pub const LENGTH: usize = AccountAddress::LENGTH;
 
-  pub fn new(ctx: &'ctx Context<'ctx>, address: AccountAddress) -> Self {
-    let z3_ctx = ctx.z3_ctx();
+  pub fn new(z3_ctx: &'ctx Context, address: AccountAddress) -> Self {
     let value = u128::from_ne_bytes(address.into());
     let ast = BV::from_u64(z3_ctx, (value >> 64) as u64, 64)
       .concat(&BV::from_u64(z3_ctx, value as u64, 64));
     Self {
-      ctx,
       ast,
     }
   }
 
-  pub fn from_ast(ctx: &'ctx Context<'ctx>, ast: BV<'ctx>) -> Self {
-    Self { ctx, ast }
-  }
-
-  pub fn get_ctx(&self) -> &'ctx Context<'ctx> {
-    self.ctx
+  pub fn from_ast(ast: BV<'ctx>) -> Self {
+    Self { ast }
   }
 
   pub fn into_address(self) -> PartialVMResult<AccountAddress> {

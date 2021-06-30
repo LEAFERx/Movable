@@ -1,4 +1,3 @@
-use crate::runtime::{interpreter::SymInterpreter, loader::Resolver};
 use diem_types::{
   account_address::AccountAddress, account_config::CORE_CODE_ADDRESS,
 };
@@ -10,7 +9,11 @@ use move_core_types::{
 // use move_vm_natives::{account, event, hash, lcs, signature};
 use crate::{
   natives::{account, signer, vector},
-  runtime::context::Context,
+  runtime::{
+    context::TypeContext,
+    interpreter::SymInterpreter,
+    loader::Resolver,
+  },
   types::{
     data_store::SymDataStore,
     natives::{SymNativeContext, SymNativeResult},
@@ -23,6 +26,7 @@ use move_vm_types::{
 use move_vm_runtime::data_cache::RemoteCache;
 use std::{collections::VecDeque, fmt::Write};
 use vm::errors::PartialVMResult;
+use z3::Context;
 
 // The set of native functions the VM supports.
 // The functions can line in any crate linked in but the VM declares them here.
@@ -125,7 +129,6 @@ impl NativeFunction {
 }
 
 pub(crate) struct SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
-  ctx: &'ctx Context<'ctx>,
   interpreter: &'a mut SymInterpreter<'ctx, 'r, 'l, R>,
   // cost_strategy: &'a ...
   resolver: &'a Resolver<'l>,
@@ -137,7 +140,6 @@ impl<'a, 'ctx, 'r, 'l, R: RemoteCache> SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
     resolver: &'a Resolver<'l>,
   ) -> Self {
     SymFunctionContext {
-      ctx: interpreter.data_cache().get_ctx(),
       interpreter,
       resolver,
     }
@@ -145,8 +147,12 @@ impl<'a, 'ctx, 'r, 'l, R: RemoteCache> SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
 }
 
 impl<'a, 'ctx, 'r, 'l, R: RemoteCache> SymNativeContext<'ctx> for SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
-  fn get_ctx(&self) -> &'ctx Context<'ctx> {
-    self.ctx
+  fn get_z3_ctx(&self) -> &'ctx Context {
+    self.interpreter.get_z3_ctx()
+  }
+
+  fn get_ty_ctx(&self) -> &TypeContext<'ctx> {
+    self.interpreter.get_ty_ctx()
   }
 
   fn print_stack_trace<B: Write>(&self, _buf: &mut B) -> PartialVMResult<()> {
@@ -167,7 +173,7 @@ impl<'a, 'ctx, 'r, 'l, R: RemoteCache> SymNativeContext<'ctx> for SymFunctionCon
     ty: Type,
     val: SymValue<'ctx>,
   ) -> PartialVMResult<bool> {
-    match self.interpreter.data_cache().emit_event(guid, seq_num, ty, val) {
+    match self.interpreter.data_cache_mut().emit_event(guid, seq_num, ty, val) {
       Ok(()) => Ok(true),
       Err(e) if e.major_status().status_type() == StatusType::InvariantViolation => Err(e),
       Err(_) => Ok(false),

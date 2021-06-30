@@ -9,13 +9,14 @@ use move_core_types::{
 };
 use vm::errors::*;
 use vm::file_format::SignatureToken;
+use z3::Context;
 
 use crate::{
   plugin::{
     PluginManager,
   },
   runtime::{
-    context::Context,
+    context::TypeContext,
     data_cache::SymDataCache,
     runtime::VMRuntime,
   },
@@ -25,7 +26,7 @@ use crate::{
 };
 
 pub struct Session<'ctx, 'r, 'l, R> {
-  pub(crate) ctx: &'ctx Context<'ctx>,
+  pub(crate) z3_ctx: &'ctx Context,
   pub(crate) runtime: &'l VMRuntime<'ctx>,
   pub(crate) data_cache: SymDataCache<'ctx, 'r, 'l, R>,
 }
@@ -39,12 +40,13 @@ impl<'ctx, 'r, 'l, R: RemoteCache> Session<'ctx, 'r, 'l, R> {
     ty_args: Vec<TypeTag>,
   ) -> VMResult<()> {
     let args = self.construct_symbolic_args(
+      self.runtime.ty_ctx(),
       module,
       function_name,
       &ty_args,
     )?;
     self.runtime.execute_function(
-      self.ctx,
+      self.z3_ctx,
       plugin_manager,
       module,
       function_name,
@@ -68,11 +70,12 @@ impl<'ctx, 'r, 'l, R: RemoteCache> Session<'ctx, 'r, 'l, R> {
 
   fn construct_symbolic_args(
     &mut self,
+    ty_ctx: &TypeContext<'ctx>,
     module: &ModuleId,
     function_name: &IdentStr,
     ty_args: &[TypeTag],
   ) -> VMResult<Vec<SymValue<'ctx>>> {
-    let ctx = self.ctx;
+    let z3_ctx = self.z3_ctx;
     let (_, _, parameter_tys, _) = self.runtime.load_function(
       module,
       function_name,
@@ -85,13 +88,13 @@ impl<'ctx, 'r, 'l, R: RemoteCache> Session<'ctx, 'r, 'l, R> {
       let tag = self.runtime.type_to_type_tag(&ty);
       let val = match tag {
         Ok(tag) => match tag {
-          TypeTag::Bool => SymValue::new_bool(ctx, prefix),
-          TypeTag::U8 => SymValue::new_u8(ctx, prefix),
-          TypeTag::U64 => SymValue::new_u64(ctx, prefix),
-          TypeTag::U128 => SymValue::new_u128(ctx, prefix),
+          TypeTag::Bool => SymValue::new_bool(z3_ctx, prefix),
+          TypeTag::U8 => SymValue::new_u8(z3_ctx, prefix),
+          TypeTag::U64 => SymValue::new_u64(z3_ctx, prefix),
+          TypeTag::U128 => SymValue::new_u128(z3_ctx, prefix),
           TypeTag::Address | TypeTag::Signer => unimplemented!(), // No symbolic address, should return error
-          TypeTag::Vector(vtag) => SymValue::new_vector(ctx, prefix, vtag.as_ref().clone()),
-          TypeTag::Struct(stag) => SymValue::new_struct(ctx, prefix, stag.clone()),
+          TypeTag::Vector(vtag) => SymValue::new_vector(z3_ctx, ty_ctx, prefix, vtag.as_ref().clone()),
+          TypeTag::Struct(stag) => SymValue::new_struct(z3_ctx, ty_ctx, prefix, stag.clone()),
         },
         Err(_) => unimplemented!(), // Can not handle reference now
       };

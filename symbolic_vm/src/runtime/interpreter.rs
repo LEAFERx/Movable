@@ -19,7 +19,7 @@ use crate::{
     PluginContext,
   },
   runtime::{
-    context::Context,
+    context::TypeContext,
     data_cache::SymDataCache,
     loader::{Function, Loader, Resolver},
     native_functions::SymFunctionContext,
@@ -45,7 +45,7 @@ use vm::{
   },
 };
 
-use z3::{Context as Z3Context, Solver, SatResult, Model};
+use z3::{Context, Solver, SatResult, Model};
 
 // macro_rules! debug_write {
 //   ($($toks: tt)*) => {
@@ -95,22 +95,22 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   /// Entrypoint into the interpreter. All external calls need to be routed through this
   /// function.
   pub(crate) fn entrypoint(
-    ctx: &'ctx Context<'ctx>,
+    z3_ctx: &'ctx Context,
     function: Arc<Function>,
     ty_args: Vec<Type>,
     args: Vec<SymValue<'ctx>>,
     data_cache: SymDataCache<'ctx, 'r, 'l, R>,
     // cost_strategy: &mut 
   ) -> VMResult<Self> {
-    let mut interp = Self::new(ctx, data_cache);
+    let mut interp = Self::new(z3_ctx, data_cache);
     
-    let mut locals = SymLocals::new(ctx, function.local_count());
+    let mut locals = SymLocals::new(z3_ctx, function.local_count());
     // TODO: assert consistency of args and function formals
     for (i, value) in args.into_iter().enumerate() {
       // TODO: wrong error handling...
       locals.store_loc(i, value).map_err(|err| err.finish(Location::Undefined))?;
     }
-    let current_frame = SymFrame::new(ctx, function, ty_args, locals);
+    let current_frame = SymFrame::new(z3_ctx, function, ty_args, locals);
     interp.call_stack.push(current_frame).map_err(|frame| {
       let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
       let err = set_err_info!(frame, err);
@@ -122,14 +122,14 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   /// Create a new instance of an `Interpreter` in the context of a transaction with a
   /// given module cache and gas schedule.
   fn new(
-    ctx: &'ctx Context<'ctx>,
+    z3_ctx: &'ctx Context,
     // cost_strategy: &mut 
     data_cache: SymDataCache<'ctx, 'r, 'l, R>,
   ) -> Self {
     SymInterpreter {
       operand_stack: SymStack::new(),
       call_stack: SymCallStack::new(),
-      solver: Solver::new(&ctx.z3_ctx()),
+      solver: Solver::new(z3_ctx),
       path_conditions: vec![],
       spec_conditions: vec![],
       data_cache,
@@ -149,12 +149,20 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
     }
   }
 
-  pub(crate) fn data_cache(&mut self) -> &mut SymDataCache<'ctx, 'r, 'l, R> {
+  pub(crate) fn data_cache(&self) -> &SymDataCache<'ctx, 'r, 'l, R> {
+    &self.data_cache
+  }
+
+  pub(crate) fn data_cache_mut(&mut self) -> &mut SymDataCache<'ctx, 'r, 'l, R> {
     &mut self.data_cache
   }
 
-  pub(crate) fn get_context(&self) -> &'ctx Context<'ctx> {
-    self.data_cache.get_ctx()
+  pub(crate) fn get_z3_ctx(&self) -> &'ctx Context {
+    self.data_cache.get_z3_ctx()
+  }
+
+  pub(crate) fn get_ty_ctx(&self) -> &TypeContext<'ctx> {
+    self.data_cache.get_ty_ctx()
   }
 
   // pub(crate) fn gas_schedule(&self) -> &CostTable {
@@ -210,7 +218,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               continue;
             }
             let frame = self
-              .make_call_frame(self.get_context(), func, vec![])
+              .make_call_frame(self.get_z3_ctx(), func, vec![])
               .map_err(|err| self.maybe_core_dump(err, &current_frame))?;
             self.call_stack.push(current_frame).map_err(|frame| {
               let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
@@ -244,7 +252,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               continue;
             }
             let frame = self
-              .make_call_frame(self.get_context(), func, vec![])
+              .make_call_frame(self.get_z3_ctx(), func, vec![])
               .map_err(|err| self.maybe_core_dump(err, &current_frame))?;
             self.call_stack.push(current_frame).map_err(|frame| {
               let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
@@ -320,8 +328,8 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   ///
   /// Native functions do not push a frame at the moment and as such errors from a native
   /// function are incorrectly attributed to the caller.
-  fn make_call_frame(&mut self, ctx: &'ctx Context<'ctx>, func: Arc<Function>, ty_args: Vec<Type>) -> VMResult<SymFrame<'ctx>> {
-    let mut locals = SymLocals::new(ctx, func.local_count());
+  fn make_call_frame(&mut self, z3_ctx: &'ctx Context, func: Arc<Function>, ty_args: Vec<Type>) -> VMResult<SymFrame<'ctx>> {
+    let mut locals = SymLocals::new(z3_ctx, func.local_count());
     let arg_count = func.arg_count();
     for i in 0..arg_count {
       locals
@@ -332,7 +340,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
         .map_err(|e| self.set_location(e))?;
     }
     Ok(SymFrame::new(
-      ctx,
+      z3_ctx,
       func,
       ty_args,
       locals
@@ -458,7 +466,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
     let mem_size = gv.size();
     let exists = gv.exists()?;
     self.operand_stack.push(SymValue::from_bool(
-      self.get_context(), exists))?;
+      self.get_z3_ctx(), exists))?;
     Ok(mem_size)
   }
 
@@ -569,8 +577,12 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
 }
 
 impl<'ctx, 'r, 'l, R: RemoteCache> PluginContext<'ctx> for SymInterpreter<'ctx, 'r, 'l, R> {
-  fn ctx(&self) -> &'ctx Context<'ctx> {
-    self.data_cache.get_ctx()
+  fn z3_ctx(&self) -> &'ctx Context {
+    self.get_z3_ctx()
+  }
+
+  fn ty_ctx(&self) -> &TypeContext<'ctx> {
+    self.get_ty_ctx()
   }
 
   fn solver(&self) -> &Solver<'ctx> {
@@ -709,7 +721,7 @@ impl<'ctx> SymCallStack<'ctx> {
 /// the function itself.
 #[derive(Debug)]
 struct SymFrame<'ctx> {
-  ctx: &'ctx Context<'ctx>,
+  z3_ctx: &'ctx Context,
   pc: u16,
   locals: SymLocals<'ctx>,
   function: Arc<Function>,
@@ -733,13 +745,13 @@ impl<'ctx> SymFrame<'ctx> {
   ///
   /// The locals must be loaded before calling this.
   fn new(
-    ctx: &'ctx Context<'ctx>,
+    z3_ctx: &'ctx Context,
     function: Arc<Function>,
     ty_args: Vec<Type>,
     locals: SymLocals<'ctx>
   ) -> Self {
     SymFrame {
-      ctx,
+      z3_ctx,
       pc: 0,
       locals,
       function,
@@ -806,15 +818,15 @@ impl<'ctx> SymFrame<'ctx> {
           }
           Bytecode::LdU8(int_const) => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_U8)?;
-            interpreter.operand_stack.push(SymValue::from_u8(interpreter.get_context(), *int_const))?;
+            interpreter.operand_stack.push(SymValue::from_u8(interpreter.get_z3_ctx(), *int_const))?;
           }
           Bytecode::LdU64(int_const) => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_U64)?;
-            interpreter.operand_stack.push(SymValue::from_u64(interpreter.get_context(), *int_const))?;
+            interpreter.operand_stack.push(SymValue::from_u64(interpreter.get_z3_ctx(), *int_const))?;
           }
           Bytecode::LdU128(int_const) => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_U128)?;
-            interpreter.operand_stack.push(SymValue::from_u128(interpreter.get_context(), *int_const))?;
+            interpreter.operand_stack.push(SymValue::from_u128(interpreter.get_z3_ctx(), *int_const))?;
           }
           // TODO:
           Bytecode::LdConst(idx) => {
@@ -827,7 +839,7 @@ impl<'ctx> SymFrame<'ctx> {
             // )?;
             interpreter
               .operand_stack
-              .push(SymValue::deserialize_constant(interpreter.get_context(), constant).ok_or_else(|| {
+              .push(SymValue::deserialize_constant(interpreter.get_z3_ctx(), interpreter.get_ty_ctx(), constant).ok_or_else(|| {
                 PartialVMError::new(StatusCode::VERIFIER_INVARIANT_VIOLATION).with_message(
                   "Verifier failed to verify the deserialization of constants".to_owned(),
                 )
@@ -835,11 +847,11 @@ impl<'ctx> SymFrame<'ctx> {
           }
           Bytecode::LdTrue => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_TRUE)?;
-            interpreter.operand_stack.push(SymValue::from_bool(interpreter.get_context(), true))?;
+            interpreter.operand_stack.push(SymValue::from_bool(interpreter.get_z3_ctx(), true))?;
           }
           Bytecode::LdFalse => {
             // gas!(const_instr: context, interpreter, Opcodes::LD_FALSE)?;
-            interpreter.operand_stack.push(SymValue::from_bool(interpreter.get_context(), false))?;
+            interpreter.operand_stack.push(SymValue::from_bool(interpreter.get_z3_ctx(), false))?;
           }
           Bytecode::CopyLoc(idx) => {
             let local = self.locals.copy_loc(*idx as usize)?;
@@ -886,7 +898,7 @@ impl<'ctx> SymFrame<'ctx> {
 
             let reference = interpreter.operand_stack.pop_as::<SymStructRef>()?;
             let offset = resolver.field_offset(*fh_idx);
-            let field_ref = reference.borrow_field(offset)?;
+            let field_ref = reference.borrow_field(interpreter.get_ty_ctx(), offset)?;
             interpreter.operand_stack.push(field_ref)?;
           }
           Bytecode::ImmBorrowFieldGeneric(fi_idx) | Bytecode::MutBorrowFieldGeneric(fi_idx) => {
@@ -898,7 +910,7 @@ impl<'ctx> SymFrame<'ctx> {
 
             let reference = interpreter.operand_stack.pop_as::<SymStructRef>()?;
             let offset = resolver.field_instantiation_offset(*fi_idx);
-            let field_ref = reference.borrow_field(offset)?;
+            let field_ref = reference.borrow_field(interpreter.get_ty_ctx(), offset)?;
             interpreter.operand_stack.push(field_ref)?;
           }
           Bytecode::Pack(sd_idx) => {
@@ -912,7 +924,7 @@ impl<'ctx> SymFrame<'ctx> {
             let struct_tag = resolver.get_struct_tag(*sd_idx);
             interpreter
               .operand_stack
-              .push(SymValue::from_sym_struct(SymStruct::pack(interpreter.get_context(), struct_tag, args)?))?;
+              .push(SymValue::from_sym_struct(SymStruct::pack(interpreter.get_z3_ctx(), interpreter.get_ty_ctx(), struct_tag, args)?))?;
           }
           Bytecode::PackGeneric(si_idx) => {
             let field_count = resolver.field_instantiation_count(*si_idx);
@@ -925,7 +937,7 @@ impl<'ctx> SymFrame<'ctx> {
             let struct_tag = resolver.instantiate_generic_tag(*si_idx, self.ty_args())?;
             interpreter
               .operand_stack
-              .push(SymValue::from_sym_struct(SymStruct::pack(interpreter.get_context(), struct_tag, args)?))?;
+              .push(SymValue::from_sym_struct(SymStruct::pack(interpreter.get_z3_ctx(), interpreter.get_ty_ctx(), struct_tag, args)?))?;
           }
           Bytecode::Unpack(_sd_idx) => {
             // let field_count = resolver.field_count(*sd_idx);
@@ -939,7 +951,7 @@ impl<'ctx> SymFrame<'ctx> {
             // TODO: Whether or not we want this gas metering in the loop is
             // questionable.  However, if we don't have it in the loop we could wind up
             // doing a fair bit of work before charging for it.
-            for value in struct_.unpack()? {
+            for value in struct_.unpack(interpreter.get_ty_ctx())? {
               // gas!(instr: context, interpreter, Opcodes::UNPACK, value.size())?;
               interpreter.operand_stack.push(value)?;
             }
@@ -956,7 +968,7 @@ impl<'ctx> SymFrame<'ctx> {
             // TODO: Whether or not we want this gas metering in the loop is
             // questionable.  However, if we don't have it in the loop we could wind up
             // doing a fair bit of work before charging for it.
-            for value in struct_.unpack()? {
+            for value in struct_.unpack(interpreter.get_ty_ctx())? {
               // gas!(
               //   instr: context,
               //   interpreter,
@@ -968,7 +980,7 @@ impl<'ctx> SymFrame<'ctx> {
           }
           Bytecode::ReadRef => {
             let reference = interpreter.operand_stack.pop_as::<SymReference>()?;
-            let value = reference.read_ref()?;
+            let value = reference.read_ref(interpreter.get_ty_ctx())?;
             // gas!(instr: context, interpreter, Opcodes::READ_REF, value.size())?;
             interpreter.operand_stack.push(value)?;
           }
@@ -1055,11 +1067,11 @@ impl<'ctx> SymFrame<'ctx> {
           }
           Bytecode::Or => {
             // gas!(const_instr: context, interpreter, Opcodes::OR)?;
-            interpreter.binop_bool(|l: SymBool<'ctx>, r| Ok(SymBool::or(self.ctx.z3_ctx(), &[l, r])))?
+            interpreter.binop_bool(|l: SymBool<'ctx>, r| Ok(SymBool::or(self.z3_ctx, &[l, r])))?
           }
           Bytecode::And => {
             // gas!(const_instr: context, interpreter, Opcodes::AND)?;
-            interpreter.binop_bool(|l: SymBool<'ctx>, r| Ok(SymBool::and(self.ctx.z3_ctx(), &[l, r])))?
+            interpreter.binop_bool(|l: SymBool<'ctx>, r| Ok(SymBool::and(self.z3_ctx, &[l, r])))?
           }
           Bytecode::Lt => {
             // gas!(const_instr: context, interpreter, Opcodes::LT)?;
@@ -1093,7 +1105,7 @@ impl<'ctx> SymFrame<'ctx> {
             // )?;
             interpreter
               .operand_stack
-              .push(SymValue::from_sym_bool(lhs.equals(&rhs)?))?;
+              .push(SymValue::from_sym_bool(lhs.equals(interpreter.get_ty_ctx(), &rhs)?))?;
           }
           Bytecode::Neq => {
             let lhs = interpreter.operand_stack.pop()?;
@@ -1106,7 +1118,7 @@ impl<'ctx> SymFrame<'ctx> {
             // )?;
             interpreter
               .operand_stack
-              .push(SymValue::from_sym_bool(lhs.equals(&rhs)?.not()))?;
+              .push(SymValue::from_sym_bool(lhs.equals(interpreter.get_ty_ctx(), &rhs)?.not()))?;
           }
           Bytecode::MutBorrowGlobal(sd_idx) | Bytecode::ImmBorrowGlobal(sd_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
@@ -1167,10 +1179,11 @@ impl<'ctx> SymFrame<'ctx> {
           Bytecode::MoveTo(sd_idx) => {
             let resource = interpreter.operand_stack.pop()?;
             let signer_reference = interpreter.operand_stack.pop_as::<SymStructRef>()?;
+            let ty_ctx = interpreter.get_ty_ctx();
             let addr = signer_reference
-              .borrow_field(0)?
+              .borrow_field(ty_ctx, 0)?
               .value_as::<SymReference>()?
-              .read_ref()?
+              .read_ref(ty_ctx)?
               .value_as::<SymAccountAddress>()?
               .into_address()?;
             let ty = resolver.get_struct_type(*sd_idx);
@@ -1180,10 +1193,11 @@ impl<'ctx> SymFrame<'ctx> {
           Bytecode::MoveToGeneric(si_idx) => {
             let resource = interpreter.operand_stack.pop()?;
             let signer_reference = interpreter.operand_stack.pop_as::<SymStructRef>()?;
+            let ty_ctx = interpreter.get_ty_ctx();
             let addr = signer_reference
-              .borrow_field(0)?
+              .borrow_field(ty_ctx, 0)?
               .value_as::<SymReference>()?
-              .read_ref()?
+              .read_ref(ty_ctx)?
               .value_as::<SymAccountAddress>()?
               .into_address()?;
             let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
@@ -1238,7 +1252,7 @@ impl<'ctx> SymFrame<'ctx> {
 
   fn fork(&self) -> Self {
     Self {
-      ctx: self.ctx,
+      z3_ctx: self.z3_ctx,
       pc: self.pc,
       function: self.function.clone(),
       ty_args: self.ty_args.clone(),

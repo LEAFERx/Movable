@@ -34,16 +34,16 @@ use z3::{
 use z3_sys::AstKind;
 
 pub struct Specification<'a> {
-  pre: Box<dyn for<'ctx> Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
-  post: Box<dyn for<'ctx> Fn(&[SymValue<'ctx>], &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
-  abort: Box<dyn for<'ctx> Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
+  pre: Box<dyn for<'ctx> Fn(&'ctx Context, &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
+  post: Box<dyn for<'ctx> Fn(&'ctx Context, &[SymValue<'ctx>], &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
+  abort: Box<dyn for<'ctx> Fn(&'ctx Context, &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
 }
 
 impl<'a> Specification<'a> {
   pub fn new(
-    pre: impl for<'ctx> Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
-    post: impl for<'ctx> Fn(&[SymValue<'ctx>], &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
-    abort: impl for<'ctx> Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
+    pre: impl for<'ctx> Fn(&'ctx Context, &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
+    post: impl for<'ctx> Fn(&'ctx Context, &[SymValue<'ctx>], &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
+    abort: impl for<'ctx> Fn(&'ctx Context, &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
   ) -> Self {
     Self {
       pre: Box::new(pre),
@@ -52,16 +52,16 @@ impl<'a> Specification<'a> {
     }
   }
 
-  pub fn pre<'ctx>(&self, args: &[SymValue<'ctx>]) -> SymBool<'ctx> {
-    (self.pre)(args)
+  pub fn pre<'ctx>(&self, z3_ctx: &'ctx Context, args: &[SymValue<'ctx>]) -> SymBool<'ctx> {
+    (self.pre)(z3_ctx, args)
   }
 
-  pub fn post<'ctx>(&self, args: &[SymValue<'ctx>], returns: &[SymValue<'ctx>]) -> SymBool<'ctx> {
-    (self.post)(args, returns)
+  pub fn post<'ctx>(&self, z3_ctx: &'ctx Context, args: &[SymValue<'ctx>], returns: &[SymValue<'ctx>]) -> SymBool<'ctx> {
+    (self.post)(z3_ctx, args, returns)
   }
 
-  pub fn abort<'ctx>(&self, args: &[SymValue<'ctx>]) -> SymBool<'ctx> {
-    (self.abort)(args)
+  pub fn abort<'ctx>(&self, z3_ctx: &'ctx Context, args: &[SymValue<'ctx>]) -> SymBool<'ctx> {
+    (self.abort)(z3_ctx, args)
   }
 }
 
@@ -94,10 +94,10 @@ impl<'a> Plugin for VerificationPlugin<'a> {
       Some(spec) => {
         let arg_count = func.arg_count();
         let args = plugin_ctx.operand_stack_mut().popn(arg_count.try_into().unwrap())?;
-        let ctx = plugin_ctx.ctx();
+        let z3_ctx = plugin_ctx.z3_ctx();
         let solver = plugin_ctx.solver();
         solver.push();
-        solver.assert(&spec.pre(args.as_slice()).as_inner().not());
+        solver.assert(&spec.pre(z3_ctx, args.as_slice()).as_inner().not());
         if solver.check() == SatResult::Sat {
           println!("precondition may not be satisfied! should abort now!");
         }
@@ -109,15 +109,15 @@ impl<'a> Plugin for VerificationPlugin<'a> {
         // TODO: also model other type of returns
         for sig in &func.returns().0 {
           let val = match sig {
-            SignatureToken::Bool => SymValue::new_bool(ctx, &prefix),
-            SignatureToken::U8 => SymValue::new_u8(ctx, &prefix),
-            SignatureToken::U64 => SymValue::new_u64(ctx, &prefix),
-            SignatureToken::U128 => SymValue::new_u128(ctx, &prefix),
+            SignatureToken::Bool => SymValue::new_bool(z3_ctx, &prefix),
+            SignatureToken::U8 => SymValue::new_u8(z3_ctx, &prefix),
+            SignatureToken::U64 => SymValue::new_u64(z3_ctx, &prefix),
+            SignatureToken::U128 => SymValue::new_u128(z3_ctx, &prefix),
             _ => unimplemented!(),
           };
           returns.push(val);
         }
-        let post_cond = spec.post(args.as_slice(), returns.as_slice());
+        let post_cond = spec.post(z3_ctx, args.as_slice(), returns.as_slice());
         solver.assert(post_cond.as_inner());
         // TODO: consider if at here solver is unsat
         plugin_ctx.spec_conditions_mut().push((args, post_cond));
@@ -138,10 +138,10 @@ impl<'a> Plugin for VerificationPlugin<'a> {
     // args: &[SymValue<'ctx>],
     return_values: &[SymValue<'ctx>],
   ) -> VMResult<()> {
-    let z3_ctx = plugin_ctx.ctx().z3_ctx();
+    let z3_ctx = plugin_ctx.z3_ctx();
     let solver = plugin_ctx.solver();
     solver.push();
-    solver.assert(self.target.post(&[], return_values).as_inner()); // TODO: args should not be empty!!
+    solver.assert(self.target.post(z3_ctx, &[], return_values).as_inner()); // TODO: args should not be empty!!
     if solver.check() == SatResult::Sat {
       solver.pop(1);
       println!("-------VERIFICATION BEGIN-------");

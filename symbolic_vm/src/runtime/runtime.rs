@@ -35,11 +35,13 @@ use std::{
   sync::Arc,
 };
 
+use z3::Context;
+
 use crate::{
   plugin::PluginManager,
   types::values::{SymValue, SymbolicMoveValue},
   runtime::{
-    context::Context,
+    context::TypeContext,
     loader::Function,
     session::Session,
   },
@@ -48,23 +50,27 @@ use crate::{
 /// An instantiation of the MoveVM.
 pub(crate) struct VMRuntime<'ctx> {
   loader: Loader,
-  _data: PhantomData<&'ctx Context<'ctx>>
+  type_context: TypeContext<'ctx>,
 }
 
 impl<'ctx> VMRuntime<'ctx> {
-  pub fn new() -> Self {
+  pub fn new(z3_ctx: &'ctx Context) -> Self {
     VMRuntime {
       loader: Loader::new(),
-      _data: PhantomData,
+      type_context: TypeContext::new(z3_ctx)
     }
   }
 
-  pub fn new_session<'r, R: RemoteCache>(&self, ctx: &'ctx Context<'ctx>, remote: &'r R) -> Session<'ctx, 'r, '_, R> {
+  pub fn new_session<'r, R: RemoteCache>(&self, z3_ctx: &'ctx Context, remote: &'r R) -> Session<'ctx, 'r, '_, R> {
     Session {
-      ctx,
+      z3_ctx,
       runtime: self,
-      data_cache: SymDataCache::new(ctx, remote, &self.loader),
+      data_cache: SymDataCache::new(z3_ctx, &self.type_context, remote, &self.loader),
     }
+  }
+
+  pub(crate) fn ty_ctx(&self) -> &TypeContext<'ctx> {
+    &self.type_context
   }
 
   pub(crate) fn publish_module(
@@ -156,7 +162,7 @@ impl<'ctx> VMRuntime<'ctx> {
 
   pub fn execute_function(
     &self,
-    ctx: &'ctx Context<'ctx>,
+    z3_ctx: &'ctx Context,
     plugin_manager: &PluginManager<'_>,
     // gas_schedule: &CostTable,
     module: &ModuleId,
@@ -178,7 +184,7 @@ impl<'ctx> VMRuntime<'ctx> {
     let args_cloned = args_cloned.map_err(|e| e.finish(Location::Undefined))?;
 
     let interp = SymInterpreter::entrypoint(
-      ctx,
+      z3_ctx,
       // gas_schedule,
       func,
       ty_args,

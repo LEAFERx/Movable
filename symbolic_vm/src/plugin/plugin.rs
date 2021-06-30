@@ -1,6 +1,6 @@
 use crate::{
   runtime::{
-    context::Context,
+    context::TypeContext,
     interpreter::{SymStack, SymCallStack},
     loader::{Loader, Function},
   },
@@ -14,10 +14,11 @@ use vm::{
 
 use move_vm_types::loaded_data::runtime_types::Type;
 
-use z3::Solver;
+use z3::{Context, Solver};
 
 pub trait PluginContext<'ctx> {
-  fn ctx(&self) -> &'ctx Context<'ctx>;
+  fn z3_ctx(&self) -> &'ctx Context;
+  fn ty_ctx(&self) -> &TypeContext<'ctx>;
   fn solver(&self) -> &Solver<'ctx>;
 
   fn operand_stack(&self) -> &SymStack<'ctx>;

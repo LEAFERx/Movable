@@ -17,7 +17,7 @@ fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> Vec<u8> {
   fs::read(bytecode_path).expect("Failed to open bytecode file")
 }
 
-fn exec<'a, 'ctx>(path: &str, func: &str, z3_ctx: &'ctx Context, p: VerificationPlugin<'a, 'ctx>) {
+fn exec<'a, 'ctx>(path: &str, func: &str, z3_ctx: &'ctx Context, p: VerificationPlugin<'a>) {
   env_logger::init();
 
   let path = Path::new(path);
@@ -32,9 +32,9 @@ fn exec<'a, 'ctx>(path: &str, func: &str, z3_ctx: &'ctx Context, p: Verification
   engine.execute_function(&module.self_id(), &function_name);
 }
 
-struct AbsSpec<'a, 'ctx> {
-  right: Specification<'a, 'ctx>,
-  wrong: Specification<'a, 'ctx>,
+struct AbsSpec<'a> {
+  right: Specification<'a>,
+  wrong: Specification<'a>,
 }
 
 #[test]
@@ -43,15 +43,15 @@ fn abs() {
   let z3_ctx = Context::new(&z3_cfg);
 
   let target_spec = Specification::new(
-    |_a: &[SymValue]| SymBool::from(&z3_ctx, true),
-    |_a: &[SymValue], r: &[SymValue]| {
+    |z3_ctx: &Context, _a: &[SymValue]| SymBool::from(&z3_ctx, true),
+    |_z3_ctx: &Context, _a: &[SymValue], r: &[SymValue]| {
       VMSymValueCast::<SymBool>::cast(r[0].copy_value().unwrap()).unwrap()
     },
-    |_a: &[SymValue]| SymBool::from(&z3_ctx, true)
+    |z3_ctx: &Context,_a: &[SymValue]| SymBool::from(&z3_ctx, true)
   );
   let abs_spec_wrong = Specification::new(
-    |_a: &[SymValue]| SymBool::from(&z3_ctx, true),
-    |_a: &[SymValue], r: &[SymValue]| {
+    |z3_ctx: &Context, _a: &[SymValue]| SymBool::from(&z3_ctx, true),
+    |z3_ctx: &Context, _a: &[SymValue], r: &[SymValue]| {
       // TODO: bad type conversions and clones
       // TODO: figure it out
       let ret = VMSymValueCast::<SymU64>::cast(r[0].copy_value().unwrap()).unwrap();
@@ -59,11 +59,11 @@ fn abs() {
         ret.as_inner().bvuge(&BV::from_u64(&z3_ctx, 10, 64)),
       )
     },
-    |_a: &[SymValue]| SymBool::from(&z3_ctx, true)
+    |z3_ctx: &Context, _a: &[SymValue]| SymBool::from(&z3_ctx, true)
   );
   let abs_spec_right = Specification::new(
-    |_a: &[SymValue]| SymBool::from(&z3_ctx, true),
-    |a: &[SymValue], r: &[SymValue]| {
+    |z3_ctx: &Context, _a: &[SymValue]| SymBool::from(&z3_ctx, true),
+    |z3_ctx: &Context, a: &[SymValue], r: &[SymValue]| {
       // TODO: bad type conversions and clones
       // TODO: figure it out
       let arg = VMSymValueCast::<SymU64>::cast(a[0].copy_value().unwrap()).unwrap();
@@ -76,13 +76,13 @@ fn abs() {
       let cond = Bool::and(&z3_ctx, &[&cond_pos, &cond_neg]);
       SymBool::from_ast(cond)
     },
-    |_a: &[SymValue]| SymBool::from(&z3_ctx, true)
+    |z3_ctx: &Context, _a: &[SymValue]| SymBool::from(&z3_ctx, true)
   );
   let abs_spec = AbsSpec {
     wrong: abs_spec_wrong,
     right: abs_spec_right,
   };
-  let mut verification_plugin = VerificationPlugin::new(&z3_ctx, target_spec);
+  let mut verification_plugin = VerificationPlugin::new(target_spec);
   let func_name = Identifier::new("abs_on_ten").unwrap();
   verification_plugin.add_spec(func_name, abs_spec.wrong);
   exec("testsuites/abs.mv", "f", &z3_ctx, verification_plugin);

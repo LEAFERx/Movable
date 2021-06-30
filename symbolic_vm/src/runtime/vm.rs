@@ -1,8 +1,7 @@
 use move_vm_runtime::data_cache::RemoteCache;
-// use z3::Context;
+use z3::Context;
 use crate::{
   runtime::{
-    context::Context,
     runtime::VMRuntime,
     session::Session,
   },
@@ -10,19 +9,19 @@ use crate::{
 
 pub struct SymbolicVM<'ctx> {
   runtime: VMRuntime<'ctx>,
-  ctx: &'ctx Context<'ctx>,
+  z3_ctx: &'ctx Context,
 }
 
 impl<'ctx> SymbolicVM<'ctx> {
-  pub fn new(ctx: &'ctx Context<'ctx>) -> Self {
+  pub fn new(z3_ctx: &'ctx Context) -> Self {
     Self {
-      runtime: VMRuntime::new(),
-      ctx,
+      runtime: VMRuntime::new(z3_ctx),
+      z3_ctx,
     }
   }
 
   pub fn new_session<'r, R: RemoteCache>(&self, remote: &'r R) -> Session<'ctx, 'r, '_, R> {
-    self.runtime.new_session(self.ctx, remote)
+    self.runtime.new_session(self.z3_ctx, remote)
   }
 }
 

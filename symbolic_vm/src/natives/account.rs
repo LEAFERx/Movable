@@ -16,7 +16,7 @@ use crate::types::{
 };
 
 pub fn native_create_signer<'ctx>(
-  _context: &mut impl SymNativeContext<'ctx>,
+  context: &mut impl SymNativeContext<'ctx>,
   ty_args: Vec<Type>,
   mut arguments: VecDeque<SymValue<'ctx>>,
 ) -> PartialVMResult<SymNativeResult<'ctx>> {
@@ -26,7 +26,7 @@ pub fn native_create_signer<'ctx>(
   let address = pop_arg!(arguments, SymAccountAddress);
   // let cost = native_gas(context.cost_table(), NativeCostIndex::CREATE_SIGNER, 0);
   let cost = InternalGasUnits::new(0);
-  Ok(SymNativeResult::ok(cost, vec![SymValue::sym_signer(address)]))
+  Ok(SymNativeResult::ok(cost, vec![SymValue::sym_signer(context.get_ty_ctx(), address)]))
 }
 
 pub fn native_destroy_signer<'ctx>(

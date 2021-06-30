@@ -13,9 +13,8 @@ use std::{
 };
 use structopt::StructOpt;
 
-use z3::Config;
+use z3::{Config, Context};
 use engine::Engine;
-use symbolic_vm::runtime::context::Context;
 
 #[derive(Debug, StructOpt)]
 struct Args {
@@ -47,9 +46,9 @@ fn main() {
     .expect("Failed to deserialize bytecode. File may be corrupted.");
 
   let z3_cfg = Config::new();
-  let ctx = Context::new(&z3_cfg);
-
-  let mut engine = Engine::from_genesis(&ctx);
+  let z3_ctx = Context::new(&z3_cfg);
+  
+  let mut engine = Engine::from_genesis(&z3_ctx);
   engine.add_module(&module.self_id(), blob);
   engine.execute_function(&module.self_id(), &function_name);
 }

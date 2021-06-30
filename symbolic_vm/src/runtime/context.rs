@@ -8,15 +8,11 @@ use diem_types::account_address::AccountAddress;
 use std::{
   cell::RefCell,
   collections::{HashMap, hash_map::Entry},
-  marker::PhantomPinned,
-  mem::MaybeUninit,
-  pin::Pin,
   rc::Rc,
 };
 
 use z3::{
   ast::Datatype,
-  Config,
   Context as Z3Context,
   datatype_builder::create_datatypes,
   DatatypeAccessor,
@@ -26,7 +22,7 @@ use z3::{
 };
 
 #[derive(Debug)]
-struct TypeContext<'ctx> {
+pub struct TypeContext<'ctx> {
   z3_ctx: &'ctx Z3Context,
 
   signer_tag: StructTag,
@@ -41,19 +37,8 @@ struct TypeContext<'ctx> {
   type_cache: RefCell<HashMap<TypeTag, Rc<Sort<'ctx>>>>,
 }
 
-#[derive(Debug)]
-struct ContextImpl<'ctx> {
-  z3_ctx: Z3Context,
-  ctx: TypeContext<'ctx>,
-
-  _pin: PhantomPinned,
-}
-
-#[derive(Debug)]
-pub struct Context<'ctx>(Pin<Box<ContextImpl<'ctx>>>);
-
 impl<'ctx> TypeContext<'ctx> {
-  fn new(z3_ctx: &'ctx Z3Context) -> Self {
+  pub fn new(z3_ctx: &'ctx Z3Context) -> Self {
     let mut tag_sorts = type_tag_datatype_sorts(z3_ctx);
     Self {
       z3_ctx,
@@ -70,15 +55,15 @@ impl<'ctx> TypeContext<'ctx> {
     }
   }
 
-  fn signer_tag(&self) -> &StructTag {
+  pub fn signer_tag(&self) -> &StructTag {
     &self.signer_tag
   }
 
-  fn signer_sort(&self) -> Rc<DatatypeSort<'ctx>> {
+  pub fn signer_sort(&self) -> Rc<DatatypeSort<'ctx>> {
     Rc::clone(&self.signer_sort)
   }
 
-  fn struct_tag_to_datatype_sort(&self, ty: StructTag) -> Rc<DatatypeSort<'ctx>> {
+  pub fn struct_tag_to_datatype_sort(&self, ty: StructTag) -> Rc<DatatypeSort<'ctx>> {
     match self.struct_cache.borrow_mut().entry(ty) {
       Entry::Occupied(e) => Rc::clone(e.get()),
       Entry::Vacant(e) => Rc::clone({
@@ -88,7 +73,7 @@ impl<'ctx> TypeContext<'ctx> {
     }
   }
 
-  fn vec_to_datatype_sort(&self, ty: TypeTag) -> Rc<DatatypeSort<'ctx>> {
+  pub fn vec_to_datatype_sort(&self, ty: TypeTag) -> Rc<DatatypeSort<'ctx>> {
     match self.vec_cache.borrow_mut().entry(ty) {
       Entry::Occupied(e) => Rc::clone(e.get()),
       Entry::Vacant(e) => Rc::clone({
@@ -98,7 +83,7 @@ impl<'ctx> TypeContext<'ctx> {
     }
   }
 
-  fn type_tag_to_sort(&self, ty: TypeTag) -> Rc<Sort<'ctx>> {
+  pub fn type_tag_to_sort(&self, ty: TypeTag) -> Rc<Sort<'ctx>> {
     match self.type_cache.borrow_mut().entry(ty) {
       Entry::Occupied(e) => Rc::clone(e.get()),
       Entry::Vacant(e) => Rc::clone({
@@ -106,56 +91,6 @@ impl<'ctx> TypeContext<'ctx> {
         e.insert(s)
       })
     }
-  }
-}
-
-impl<'ctx> ContextImpl<'ctx> {
-  fn new(z3_cfg: &Config) -> Pin<Box<Self>> {
-    let z3_ctx = Z3Context::new(z3_cfg);
-    let ctx = Self {
-      z3_ctx,
-      ctx: unsafe { MaybeUninit::uninit().assume_init() },
-      _pin: PhantomPinned,
-    };
-    let mut boxed = Box::pin(ctx);
-    let z3_ctx_ptr: *const Z3Context = &boxed.as_ref().z3_ctx;
-    unsafe { boxed.as_mut().get_unchecked_mut().ctx = TypeContext::new(&*z3_ctx_ptr); }
-    boxed
-  }
-
-  fn z3_ctx(self: Pin<&Self>) -> &'ctx Z3Context {
-    let z3_ctx_ptr: *const Z3Context = &self.z3_ctx;
-    unsafe { &*z3_ctx_ptr }
-  }
-}
-
-impl<'ctx> Context<'ctx> {
-  pub fn new(z3_cfg: &Config) -> Self {
-    Self(ContextImpl::new(z3_cfg))
-  }
-
-  pub fn z3_ctx(&self) -> &'ctx Z3Context {
-    ContextImpl::z3_ctx(self.0.as_ref())
-  }
-
-  pub fn signer_tag(&self) -> StructTag {
-    self.0.as_ref().ctx.signer_tag().clone()
-  }
-
-  pub fn signer_sort(&self) -> Rc<DatatypeSort<'ctx>> {
-    self.0.as_ref().ctx.signer_sort()
-  }
-
-  pub fn struct_tag_to_datatype_sort(&self, ty: StructTag) -> Rc<DatatypeSort<'ctx>> {
-    self.0.as_ref().ctx.struct_tag_to_datatype_sort(ty)
-  }
-  
-  pub fn vec_to_datatype_sort(&self, ty: TypeTag) -> Rc<DatatypeSort<'ctx>> {
-    self.0.as_ref().ctx.vec_to_datatype_sort(ty)
-  }
-
-  pub fn type_tag_to_sort(&self, ty: TypeTag) -> Rc<Sort<'ctx>> {
-    self.0.as_ref().ctx.type_tag_to_sort(ty)
   }
 
   pub fn struct_tag_to_layout(&self, ty: &StructTag) -> MoveStructLayout {
