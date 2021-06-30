@@ -10,6 +10,7 @@ use move_core_types::{
 // use move_vm_natives::{account, event, hash, lcs, signature};
 use crate::{
   natives::{account, signer, vector},
+  runtime::context::Context,
   types::{
     data_store::SymDataStore,
     natives::{SymNativeContext, SymNativeResult},
@@ -22,7 +23,6 @@ use move_vm_types::{
 use move_vm_runtime::data_cache::RemoteCache;
 use std::{collections::VecDeque, fmt::Write};
 use vm::errors::PartialVMResult;
-use z3::Context;
 
 // The set of native functions the VM supports.
 // The functions can line in any crate linked in but the VM declares them here.
@@ -125,7 +125,7 @@ impl NativeFunction {
 }
 
 pub(crate) struct SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
-  z3_ctx: &'ctx Context,
+  ctx: &'ctx Context<'ctx>,
   interpreter: &'a mut SymInterpreter<'ctx, 'r, 'l, R>,
   // cost_strategy: &'a ...
   resolver: &'a Resolver<'l>,
@@ -137,7 +137,7 @@ impl<'a, 'ctx, 'r, 'l, R: RemoteCache> SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
     resolver: &'a Resolver<'l>,
   ) -> Self {
     SymFunctionContext {
-      z3_ctx: interpreter.data_cache().get_z3_ctx(),
+      ctx: interpreter.data_cache().get_ctx(),
       interpreter,
       resolver,
     }
@@ -145,8 +145,8 @@ impl<'a, 'ctx, 'r, 'l, R: RemoteCache> SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
 }
 
 impl<'a, 'ctx, 'r, 'l, R: RemoteCache> SymNativeContext<'ctx> for SymFunctionContext<'a, 'ctx, 'r, 'l, R> {
-  fn get_z3_ctx(&self) -> &'ctx Context {
-    self.z3_ctx
+  fn get_ctx(&self) -> &'ctx Context<'ctx> {
+    self.ctx
   }
 
   fn print_stack_trace<B: Write>(&self, _buf: &mut B) -> PartialVMResult<()> {

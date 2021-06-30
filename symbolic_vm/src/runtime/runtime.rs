@@ -35,11 +35,11 @@ use std::{
   sync::Arc,
 };
 
-use z3::Context;
 use crate::{
   plugin::PluginManager,
   types::values::{SymValue, SymbolicMoveValue},
   runtime::{
+    context::Context,
     loader::Function,
     session::Session,
   },
@@ -48,23 +48,22 @@ use crate::{
 /// An instantiation of the MoveVM.
 pub(crate) struct VMRuntime<'ctx> {
   loader: Loader,
-
-  phatom: PhantomData<&'ctx Context>,
+  _data: PhantomData<&'ctx Context<'ctx>>
 }
 
 impl<'ctx> VMRuntime<'ctx> {
   pub fn new() -> Self {
     VMRuntime {
       loader: Loader::new(),
-      phatom: PhantomData,
+      _data: PhantomData,
     }
   }
 
-  pub fn new_session<'r, R: RemoteCache>(&self, z3_ctx: &'ctx Context, remote: &'r R) -> Session<'ctx, 'r, '_, R> {
+  pub fn new_session<'r, R: RemoteCache>(&self, ctx: &'ctx Context<'ctx>, remote: &'r R) -> Session<'ctx, 'r, '_, R> {
     Session {
-      z3_ctx,
+      ctx,
       runtime: self,
-      data_cache: SymDataCache::new(z3_ctx, remote, &self.loader),
+      data_cache: SymDataCache::new(ctx, remote, &self.loader),
     }
   }
 
@@ -157,8 +156,8 @@ impl<'ctx> VMRuntime<'ctx> {
 
   pub fn execute_function(
     &self,
-    z3_ctx: &'ctx Context,
-    plugin_manager: &PluginManager<'_, 'ctx>,
+    ctx: &'ctx Context<'ctx>,
+    plugin_manager: &PluginManager<'_>,
     // gas_schedule: &CostTable,
     module: &ModuleId,
     function_name: &IdentStr,
@@ -179,7 +178,7 @@ impl<'ctx> VMRuntime<'ctx> {
     let args_cloned = args_cloned.map_err(|e| e.finish(Location::Undefined))?;
 
     let interp = SymInterpreter::entrypoint(
-      z3_ctx,
+      ctx,
       // gas_schedule,
       func,
       ty_args,

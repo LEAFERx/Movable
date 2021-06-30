@@ -8,11 +8,14 @@ use move_core_types::{
 };
 
 use serde::{Deserialize, Serialize};
-use z3::{Config, Context, ast::{Ast, BV, Bool, Dynamic}};
+use z3::{ast::{Ast, BV, Bool, Dynamic}};
 
 use symbolic_vm::{
   plugin::{IntegerArithmeticPlugin, Plugin, PluginManager, Specification, VerificationPlugin},
-  runtime::vm::SymbolicVM,
+  runtime::{
+    context::Context,
+    vm::SymbolicVM,
+  },
   types::values::{SymValue, VMSymValueCast, SymU64, SymBool},
 };
 
@@ -28,34 +31,32 @@ pub struct EngineConfig {
 }
 
 pub struct Engine<'a, 'ctx> {
-  z3_ctx: &'ctx Context,
+  ctx: &'ctx Context<'ctx>,
   data_store: FakeDataStore,
-  plugin_manager: PluginManager<'a, 'ctx>,
+  plugin_manager: PluginManager<'a>,
 }
 
 impl<'a, 'ctx> Engine<'a, 'ctx> {
-  pub fn from_genesis(z3_ctx: &'ctx Context) -> Self {
-    let mut engine = Engine {
-      z3_ctx,
-      data_store: FakeDataStore::default(),
+  pub fn from_genesis(ctx: &'ctx Context<'ctx>) -> Self {
+    let mut data_store = FakeDataStore::default();
+    data_store.add_write_set(GENESIS_CHANGE_SET.clone().write_set());
+    Engine {
+      ctx,
+      data_store,
       plugin_manager: PluginManager::new(),
-    };
-    engine
-      .data_store
-      .add_write_set(GENESIS_CHANGE_SET.clone().write_set());
-    engine
+    }
   }
 
   pub fn add_module(&mut self, module_id: &ModuleId, blob: Vec<u8>) {
     self.data_store.add_module(module_id, blob);
   }
 
-  pub fn add_plugin(&mut self, plugin: impl Plugin<'ctx> + 'a) {
+  pub fn add_plugin(&mut self, plugin: impl Plugin + 'a) {
     self.plugin_manager.add_plugin(plugin)
   }
   
   pub fn execute_function(&mut self, module: &ModuleId, function_name: &IdentStr) {
-    let vm = SymbolicVM::new(self.z3_ctx);
+    let vm = SymbolicVM::new(self.ctx);
     let sender = AccountAddress::random();
     let session = vm.new_session(&self.data_store);
 

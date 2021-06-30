@@ -15,22 +15,22 @@ use move_vm_types::loaded_data::runtime_types::Type;
 
 use std::vec::Vec;
 
-pub struct PluginManager<'a, 'ctx> {
-  plugins: Vec<Box<dyn Plugin<'ctx> + 'a>>,
+pub struct PluginManager<'a> {
+  plugins: Vec<Box<dyn Plugin + 'a>>,
 }
 
-impl<'a, 'ctx> PluginManager<'a, 'ctx> {
+impl<'a> PluginManager<'a> {
   pub fn new() -> Self {
     Self {
       plugins: vec![],
     }
   }
 
-  pub fn add_plugin(&mut self, p: impl Plugin<'ctx> + 'a) {
+  pub fn add_plugin(&mut self, p: impl Plugin + 'a) {
     self.plugins.push(Box::new(p));
   }
 
-  pub(crate) fn before_execute_instruction(
+  pub(crate) fn before_execute_instruction<'ctx>(
     &self,
     plugin_context: &mut dyn PluginContext<'ctx>,
     instruction: &Bytecode
@@ -41,7 +41,7 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
     Ok(())
   }
 
-  pub(crate) fn before_call(
+  pub(crate) fn before_call<'ctx>(
     &self,
     plugin_context: &mut dyn PluginContext<'ctx>,
     func: &Function,
@@ -54,14 +54,14 @@ impl<'a, 'ctx> PluginManager<'a, 'ctx> {
     Ok(result)
   }
 
-  pub(crate) fn before_execute(&self) -> VMResult<()> {
+  pub(crate) fn before_execute<'ctx>(&self) -> VMResult<()> {
     for plugin in self.plugins.iter() {
       plugin.on_before_execute()?;
     }
     Ok(())
   }
 
-  pub(crate) fn after_execute(
+  pub(crate) fn after_execute<'ctx>(
     &self,
     plugin_context: &mut dyn PluginContext<'ctx>,
     return_values: &[SymValue<'ctx>],

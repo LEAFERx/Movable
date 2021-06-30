@@ -1,5 +1,6 @@
 use crate::{
   runtime::{
+    context::Context,
     interpreter::{SymStack, SymCallStack},
     loader::{Loader, Function},
   },
@@ -13,10 +14,10 @@ use vm::{
 
 use move_vm_types::loaded_data::runtime_types::Type;
 
-use z3::{Context, Solver};
+use z3::Solver;
 
 pub trait PluginContext<'ctx> {
-  fn z3_ctx(&self) -> &'ctx Context;
+  fn ctx(&self) -> &'ctx Context<'ctx>;
   fn solver(&self) -> &Solver<'ctx>;
 
   fn operand_stack(&self) -> &SymStack<'ctx>;
@@ -28,8 +29,8 @@ pub trait PluginContext<'ctx> {
   fn spec_conditions_mut(&mut self) -> &mut Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)>;
 }
 
-pub trait Plugin<'ctx> {
-  fn on_before_execute_instrcution(
+pub trait Plugin {
+  fn on_before_execute_instrcution<'ctx>(
     &self,
     _plugin_context: &mut dyn PluginContext<'ctx>,
     _instruction: &Bytecode
@@ -37,7 +38,7 @@ pub trait Plugin<'ctx> {
     Ok(())
   }
 
-  fn on_before_call(
+  fn on_before_call<'ctx>(
     &self,
     _plugin_context: &mut dyn PluginContext<'ctx>,
     _func: &Function,
@@ -46,11 +47,11 @@ pub trait Plugin<'ctx> {
     Ok(false)
   }
 
-  fn on_before_execute(&self) -> VMResult<()> {
+  fn on_before_execute<'ctx>(&self) -> VMResult<()> {
     Ok(())
   }
 
-  fn on_after_execute(
+  fn on_after_execute<'ctx>(
     &self,
     _plugin_context: &mut dyn PluginContext<'ctx>,
     _return_values: &[SymValue<'ctx>],

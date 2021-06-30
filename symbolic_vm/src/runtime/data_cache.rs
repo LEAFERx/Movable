@@ -1,7 +1,10 @@
 // use diem_logger::prelude::*;
 // use diem_state_view::StateView;
 use crate::{
-  runtime::loader::Loader,
+  runtime::{
+    context::Context,
+    loader::Loader,
+  },
   types::{
     data_store::SymDataStore,
     effects::{SymAccountChangeSet, SymChangeSet, SymEvent},
@@ -19,8 +22,6 @@ use move_vm_runtime::data_cache::RemoteCache;
 use move_vm_types::{loaded_data::runtime_types::Type, values::Value};
 use std::collections::btree_map::BTreeMap;
 use vm::errors::*;
-
-use z3::Context;
 
 pub struct SymAccountDataCache<'ctx> {
   data_map: BTreeMap<Type, (MoveTypeLayout, SymGlobalValue<'ctx>)>,
@@ -40,7 +41,7 @@ impl<'ctx> SymAccountDataCache<'ctx> {
       data_map: self.data_map
         .iter().map(|(key, value)| {
           let cloned_key = key.clone();
-          let cloned_value = (value.0.clone(), value.1.clone_for_symbolic_state_fork());
+          let cloned_value = (value.0.clone(), value.1.fork());
           (cloned_key, cloned_value)
         })
         .collect(),
@@ -50,7 +51,7 @@ impl<'ctx> SymAccountDataCache<'ctx> {
 }
 
 pub struct SymDataCache<'ctx, 'r, 'l, R> {
-  z3_ctx: &'ctx Context,
+  ctx: &'ctx Context<'ctx>,
   remote: &'r R,
   loader: &'l Loader,
   account_map: BTreeMap<AccountAddress, SymAccountDataCache<'ctx>>,
@@ -58,9 +59,9 @@ pub struct SymDataCache<'ctx, 'r, 'l, R> {
 }
 
 impl<'ctx, 'r, 'l, R: RemoteCache> SymDataCache<'ctx, 'r, 'l, R> {
-  pub(crate) fn new(z3_ctx: &'ctx Context, remote: &'r R, loader: &'l Loader) -> Self {
+  pub(crate) fn new(ctx: &'ctx Context<'ctx>, remote: &'r R, loader: &'l Loader) -> Self {
     Self {
-      z3_ctx,
+      ctx,
       remote,
       loader,
       account_map: BTreeMap::new(),
@@ -70,7 +71,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymDataCache<'ctx, 'r, 'l, R> {
 
   pub fn fork(&self) -> Self {
     Self {
-      z3_ctx: self.z3_ctx,
+      ctx: self.ctx,
       remote: self.remote,
       loader: self.loader,
       account_map: self.account_map.iter().map(|(addr, data)| (addr.clone(), data.fork())).collect(),
@@ -151,8 +152,8 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymDataCache<'ctx, 'r, 'l, R> {
 }
 
 impl<'ctx, 'r, 'l, R: RemoteCache> SymDataStore<'ctx> for SymDataCache<'ctx, 'r, 'l, R> {
-  fn get_z3_ctx(&self) -> &'ctx Context {
-    self.z3_ctx
+  fn get_ctx(&self) -> &'ctx Context<'ctx> {
+    self.ctx
   }
 
   // Retrieve data from the local cache or loads it from the remote cache into the local cache.
@@ -183,7 +184,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymDataStore<'ctx> for SymDataCache<'ctx, 'r,
           let val = match Value::simple_deserialize(&blob, &ty_layout) {
             Some(val) => {
               let ty_tag = TypeTag::Struct(ty_tag);
-              SymValue::from_deserialized_value(self.z3_ctx, val, &ty_tag)?
+              SymValue::from_deserialized_value(self.ctx, val, ty_tag)?
             },
             None => {
               let msg = format!("Failed to deserialize resource {} at {}!", ty_tag, addr);

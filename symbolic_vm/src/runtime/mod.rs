@@ -1,3 +1,4 @@
+pub mod context;
 pub mod data_cache;
 pub mod interpreter;
 pub mod loader;

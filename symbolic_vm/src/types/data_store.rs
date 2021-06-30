@@ -1,8 +1,10 @@
 use move_vm_types::loaded_data::runtime_types::Type;
 use move_core_types::{account_address::AccountAddress, language_storage::ModuleId};
 use vm::errors::{PartialVMResult, VMResult};
-use crate::types::values::{SymGlobalValue, SymValue};
-use z3::Context;
+use crate::{
+  runtime::context::Context,
+  types::values::{SymGlobalValue, SymValue},
+};
 
 /// Provide an implementation for bytecodes related to data with a given data store.
 ///
@@ -11,7 +13,7 @@ use z3::Context;
 /// an in memory cache for a given transaction and the atomic transactional changes
 /// proper of a script execution (transaction).
 pub trait SymDataStore<'ctx> {
-  fn get_z3_ctx(&self) -> &'ctx Context;
+  fn get_ctx(&self) -> &'ctx Context<'ctx>;
 
   // ---
   // StateStore operations

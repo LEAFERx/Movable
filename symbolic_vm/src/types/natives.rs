@@ -25,8 +25,10 @@ use move_vm_types::{
 use std::fmt::Write;
 use vm::errors::PartialVMResult;
 
-use crate::types::values::SymValue;
-use z3::Context;
+use crate::{
+  runtime::context::Context,
+  types::values::SymValue,
+};
 
 pub use move_core_types::vm_status::StatusCode;
 pub use vm::errors::PartialVMError;
@@ -38,8 +40,8 @@ pub use vm::errors::PartialVMError;
 /// The set of native functions and their linkage is entirely inside the MoveVM
 /// runtime.
 pub trait SymNativeContext<'ctx> {
-  /// Returns Z3 context
-  fn get_z3_ctx(&self) -> &'ctx Context;
+  /// Returns the symbolic context
+  fn get_ctx(&self) -> &'ctx Context<'ctx>;
   /// Prints stack trace.
   fn print_stack_trace<B: Write>(&self, buf: &mut B) -> PartialVMResult<()>;
   /// Gets cost table ref.

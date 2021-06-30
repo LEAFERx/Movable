@@ -20,8 +20,8 @@ impl IntegerArithmeticPlugin {
   }
 }
 
-impl<'ctx> Plugin<'ctx> for IntegerArithmeticPlugin {
-  fn on_before_execute_instrcution<'vtxn>(
+impl Plugin for IntegerArithmeticPlugin {
+  fn on_before_execute_instrcution<'ctx>(
     &self,
     plugin_ctx: &mut dyn PluginContext<'ctx>,
     instruction: &Bytecode

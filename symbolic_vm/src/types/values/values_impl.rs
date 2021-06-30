@@ -31,18 +31,18 @@ use vm::{
 
 use z3::{
   ast::{Ast, Array, BV, Datatype, Dynamic},
-  Context,
   DatatypeSort,
   Sort,
 };
 
 use crate::{
+  runtime::context::Context,
   types::{
     natives::{SymNativeContext, SymNativeResult},
     values::{
       account_address::SymAccountAddress,
       primitives::{SymBool, SymU128, SymU64, SymU8},
-      sort::*,
+      // sort::*,
       SymbolicMoveValue,
     },
   },
@@ -159,17 +159,17 @@ enum SymReferenceImpl<'ctx> {
 
 #[derive(Debug)]
 struct SymStructImpl<'ctx> {
-  z3_ctx: &'ctx Context,
+  ctx: &'ctx Context<'ctx>,
   struct_type: StructTag,
-  datatype: Rc<RefCell<DatatypeSort<'ctx>>>,
+  datatype: Rc<DatatypeSort<'ctx>>,
   data: Datatype<'ctx>,
 }
 
 #[derive(Debug)]
 pub(crate) struct SymVectorImpl<'ctx> {
-  z3_ctx: &'ctx Context,
+  ctx: &'ctx Context<'ctx>,
   element_type: TypeTag,
-  datatype: Rc<RefCell<DatatypeSort<'ctx>>>,
+  datatype: Rc<DatatypeSort<'ctx>>,
   data: Datatype<'ctx>,
 }
 
@@ -281,7 +281,7 @@ pub enum SymGlobalValueEffect<T> {
 **************************************************************************************/
 impl<'ctx> SymStructImpl<'ctx> {
   fn len(&self) -> usize {
-    self.datatype.borrow().variants[0].accessors.len()
+    self.datatype.variants[0].accessors.len()
   }
 }
 
@@ -316,8 +316,8 @@ impl<'ctx> SymContainer<'ctx> {
   // TODO: Figure out the signer struct symbolization
   fn signer(x: SymAccountAddress<'ctx>) -> Self {
     let ast = x.as_ast().unwrap();
-    let z3_ctx = ast.get_ctx();
-    let inner = SymStructImpl::signer(z3_ctx, &ast);
+    let ctx = x.get_ctx();
+    let inner = SymStructImpl::signer(ctx, &ast);
     SymContainer::Struct(Rc::new(RefCell::new(inner)))
   }
 }
@@ -359,61 +359,61 @@ macro_rules! set_local_by_idx {
 
 impl<'ctx> SymStructImpl<'ctx> {
   fn new(
-    z3_ctx: &'ctx Context,
-    struct_type: &StructTag,
+    ctx: &'ctx Context<'ctx>,
+    struct_type: StructTag,
     fields: &[&Dynamic<'ctx>],
   ) -> Self {
-    let datatype = struct_tag_to_datatype_sort(z3_ctx, &struct_type);
+    let datatype = ctx.struct_tag_to_datatype_sort(struct_type.clone());
     let data = datatype.variants[0].constructor.apply(fields).as_datatype().unwrap();
     SymStructImpl {
-      z3_ctx,
-      struct_type: struct_type.clone(),
-      datatype: Rc::new(RefCell::new(datatype)),
+      ctx,
+      struct_type,
+      datatype,
       data,
     }
   }
 
   fn new_ast(
-    z3_ctx: &'ctx Context,
+    ctx: &'ctx Context<'ctx>,
     prefix: &str,
-    struct_type: &StructTag,
+    struct_type: StructTag,
   ) -> Self {
-    let dsort = struct_tag_to_datatype_sort(z3_ctx, &struct_type);
-    let data = Datatype::fresh_const(z3_ctx, prefix, &dsort.sort);
+    let datatype = ctx.struct_tag_to_datatype_sort(struct_type.clone());
+    let data = Datatype::fresh_const(ctx.z3_ctx(), prefix, &datatype.sort);
     Self {
-      z3_ctx,
-      struct_type: struct_type.clone(),
-      datatype: Rc::new(RefCell::new(dsort)),
+      ctx,
+      struct_type,
+      datatype,
       data,
     }
   }
 
-  fn signer(z3_ctx: &'ctx Context, addr: &Dynamic<'ctx>) -> Self {
-    let datatype = signer_sort(z3_ctx);
+  fn signer(ctx: &'ctx Context<'ctx>, addr: &Dynamic<'ctx>) -> Self {
+    let datatype = ctx.signer_sort();
     let data = datatype.variants[0].constructor.apply(&[addr]).as_datatype().unwrap();
     SymStructImpl {
-      z3_ctx,
-      struct_type: signer_tag(),
-      datatype: Rc::new(RefCell::new(datatype)),
+      ctx,
+      struct_type: ctx.signer_tag().clone(),
+      datatype,
       data,
     }
   }
 
-  fn from_ast(z3_ctx: &'ctx Context, struct_type: &StructTag, ast: Datatype<'ctx>) -> Self {
-    let datatype = struct_tag_to_datatype_sort(z3_ctx, struct_type);
+  fn from_ast(ctx: &'ctx Context<'ctx>, struct_type: StructTag, ast: Datatype<'ctx>) -> Self {
+    let datatype = ctx.struct_tag_to_datatype_sort(struct_type.clone());
     Self {
-      z3_ctx,
-      struct_type: struct_type.clone(),
-      datatype: Rc::new(RefCell::new(datatype)),
+      ctx,
+      struct_type,
+      datatype,
       data: ast,
     }
   }
 
-  fn from_signer_ast(z3_ctx: &'ctx Context, ast: Datatype<'ctx>) -> Self {
+  fn from_signer_ast(ctx: &'ctx Context<'ctx>, ast: Datatype<'ctx>) -> Self {
     Self {
-      z3_ctx,
-      struct_type: signer_tag(),
-      datatype: Rc::new(RefCell::new(signer_sort(z3_ctx))),
+      ctx,
+      struct_type: ctx.signer_tag().clone(),
+      datatype: ctx.signer_sort(),
       data: ast,
     }
   }
@@ -425,7 +425,7 @@ impl<'ctx> SymStructImpl<'ctx> {
           .with_message(format!("cannot access invalid value at index {}", idx))
       );
     }
-    Ok(self.datatype.borrow().variants[0].accessors[idx].apply(&[&Dynamic::from_ast(&self.data)]))
+    Ok(self.datatype.variants[0].accessors[idx].apply(&[&Dynamic::from_ast(&self.data)]))
   }
 
   fn set_raw(&mut self, idx: usize, val: Dynamic<'ctx>) -> PartialVMResult<()> {
@@ -443,7 +443,7 @@ impl<'ctx> SymStructImpl<'ctx> {
     }
     let field_refs = fields.iter().collect::<Vec<_>>();
     self.data = self
-      .datatype.borrow()
+      .datatype
       .variants[0].constructor.apply(field_refs.as_slice())
       .as_datatype().unwrap();
     Ok(())
@@ -456,7 +456,7 @@ impl<'ctx> SymStructImpl<'ctx> {
     )?;
     let ast = self.get_raw(idx)?;
     let ty = &self.struct_type.type_params[idx];
-    SymValue::from_ast_with_type(self.z3_ctx, ast, ty)
+    SymValue::from_ast_with_type(self.ctx, ast, ty)
   }
 
   fn set(&mut self, idx: &SymbolicContainerIndex<'ctx>, val: SymValue<'ctx>) -> PartialVMResult<()> {
@@ -470,16 +470,16 @@ impl<'ctx> SymStructImpl<'ctx> {
   }
   
   fn pack<I: IntoIterator<Item = SymValue<'ctx>>>(
-    z3_ctx: &'ctx Context,
-    struct_type: &StructTag,
+    ctx: &'ctx Context<'ctx>,
+    struct_type: StructTag,
     values: I
   ) -> PartialVMResult<Self> {
     let fields = values.into_iter()
       .map(|v| v.as_ast()).collect::<PartialVMResult<Vec<_>>>()?;
     let field_refs = fields.iter().collect::<Vec<_>>();
     Ok(Self::new(
-      z3_ctx,
-      &struct_type,
+      ctx,
+      struct_type,
       field_refs.as_slice(),
     ))
   }
@@ -487,7 +487,7 @@ impl<'ctx> SymStructImpl<'ctx> {
   fn get_internal(&self, idx: usize) -> PartialVMResult<SymValue<'ctx>> {
     let ast = self.get_raw(idx)?;
     let ty = &self.struct_type.type_params[idx];
-    Ok(SymValue::from_ast_with_type(self.z3_ctx, ast, ty)?)
+    Ok(SymValue::from_ast_with_type(self.ctx, ast, ty)?)
   }
 
   fn unpack(self) -> PartialVMResult<Vec<SymValue<'ctx>>> {
@@ -503,21 +503,21 @@ impl<'ctx> SymVectorImpl<'ctx> {
   fn make(&self, array: &Array<'ctx>, len: &BV<'ctx>) -> Datatype<'ctx> {
     let array = Dynamic::from_ast(array);
     let len = Dynamic::from_ast(len);
-    self.datatype.borrow()
+    self.datatype
       .variants[0].constructor.apply(&[&array, &len])
       .as_datatype().unwrap()
   }
 
   fn array(&self) -> Array<'ctx> {
     let data = Dynamic::from_ast(&self.data);
-    self.datatype.borrow()
+    self.datatype
       .variants[0].accessors[0]
       .apply(&[&data]).as_array().unwrap()
   }
 
   fn symlen(&self) -> BV<'ctx> {
     let data = Dynamic::from_ast(&self.data);
-    self.datatype.borrow()
+    self.datatype
       .variants[0].accessors[1]
       .apply(&[&data]).as_bv().unwrap()
   }
@@ -548,42 +548,44 @@ impl<'ctx> SymVectorImpl<'ctx> {
   }
 
   fn new(
-    z3_ctx: &'ctx Context,
-    element_type: &TypeTag,
+    ctx: &'ctx Context<'ctx>,
+    element_type: TypeTag,
     values: &[&Dynamic<'ctx>],
   ) -> Self {
-    let range_sort = type_tag_to_sort(z3_ctx, element_type);
-    let vector_datatypesort = vec_to_datatype_sort(z3_ctx, element_type);
+    let z3_ctx = ctx.z3_ctx();
+
+    let range_sort = ctx.type_tag_to_sort(element_type.clone());
+    let datatype = ctx.vec_to_datatype_sort(element_type.clone());
 
     let mut arr = Array::fresh_const(z3_ctx, "vector", &Sort::bitvector(z3_ctx, 64), &range_sort);
     for i in 0..values.len() {
       arr = arr.store(&BV::from_u64(z3_ctx, i as u64, 64), values[i]);
     }
     let symlen = BV::from_u64(z3_ctx, values.len() as u64, 64);
-    let data = vector_datatypesort
+    let data = datatype
       .variants[0].constructor.apply(&[&arr.into(), &symlen.into()])
       .as_datatype().unwrap();
 
     Self {
-      z3_ctx,
-      element_type: element_type.clone(),
-      datatype: Rc::new(RefCell::new(vector_datatypesort)),
+      ctx,
+      element_type,
+      datatype,
       data,
     }
   }
 
   fn new_ast(
-    z3_ctx: &'ctx Context,
+    ctx: &'ctx Context<'ctx>,
     prefix: &str,
-    element_type: &TypeTag,
+    element_type: TypeTag,
   ) -> Self {
-    let dsort = vec_to_datatype_sort(z3_ctx, element_type);
-    let data = Datatype::fresh_const(z3_ctx, prefix, &dsort.sort);
+    let datatype = ctx.vec_to_datatype_sort(element_type.clone());
+    let data = Datatype::fresh_const(ctx.z3_ctx(), prefix, &datatype.sort);
 
     Self {
-      z3_ctx,
-      element_type: element_type.clone(),
-      datatype: Rc::new(RefCell::new(dsort)),
+      ctx,
+      element_type,
+      datatype,
       data,
     }
   }
@@ -593,13 +595,13 @@ impl<'ctx> SymVectorImpl<'ctx> {
 
     let ast = match idx {
       Concrete(idx) => {
-        let idx = BV::from_u64(self.z3_ctx, *idx as u64, 64);
+        let idx = BV::from_u64(self.ctx.z3_ctx(), *idx as u64, 64);
         self.get_raw(&idx)
       },
       Symbolic(idx) => self.get_raw(&idx.as_inner()),
     };
     let ty = &self.element_type;
-    Ok(SymValue::from_ast_with_type(self.z3_ctx, ast, ty)?)
+    Ok(SymValue::from_ast_with_type(self.ctx, ast, ty)?)
   }
   
   fn set(
@@ -611,7 +613,7 @@ impl<'ctx> SymVectorImpl<'ctx> {
 
     match idx {
       Concrete(idx) => {
-        let idx = BV::from_u64(self.z3_ctx, *idx as u64, 64);
+        let idx = BV::from_u64(self.ctx.z3_ctx(), *idx as u64, 64);
         self.set_raw(&idx, &val.as_ast()?);
       },
       Symbolic(idx) => self.set_raw(&idx.as_inner(), &val.as_ast()?),
@@ -619,31 +621,31 @@ impl<'ctx> SymVectorImpl<'ctx> {
     Ok(())
   }
 
-  fn from_ast(z3_ctx: &'ctx Context, element_type: &TypeTag, ast: Datatype<'ctx>) -> Self {
-    let vector_datatypesort = vec_to_datatype_sort(z3_ctx, element_type);
+  fn from_ast(ctx: &'ctx Context<'ctx>, element_type: TypeTag, ast: Datatype<'ctx>) -> Self {
+    let datatype = ctx.vec_to_datatype_sort(element_type.clone());
     Self {
-      z3_ctx,
-      element_type: element_type.clone(),
-      datatype: Rc::new(RefCell::new(vector_datatypesort)),
+      ctx,
+      element_type,
+      datatype,
       data: ast,
     }
   }
 
-  fn empty(z3_ctx: &'ctx Context, element_type: &TypeTag) -> Self {
-    Self::new(z3_ctx, element_type, &[])
+  fn empty(ctx: &'ctx Context<'ctx>, element_type: TypeTag) -> Self {
+    Self::new(ctx, element_type, &[])
   }
 
   fn push(&mut self, val: &Dynamic<'ctx>) {
     let len = self.symlen();
     let v = self.array();
     let v = v.store(&Dynamic::from_ast(&len), val);
-    let updated_len = len.bvadd(&BV::from_u64(self.z3_ctx, 1, 64)).simplify();
+    let updated_len = len.bvadd(&BV::from_u64(self.ctx.z3_ctx(), 1, 64)).simplify();
     self.data = self.make(&v.into(), &updated_len.into());
   }
   
   fn pop(&mut self) -> Dynamic<'ctx> {
     let len = self.symlen();
-    let updated_len = len.bvsub(&BV::from_u64(self.z3_ctx, 1, 64)).simplify();
+    let updated_len = len.bvsub(&BV::from_u64(self.ctx.z3_ctx(), 1, 64)).simplify();
     self.set_symlen(&updated_len);
     let v = self.array();
     v.select(&updated_len)
@@ -767,7 +769,7 @@ impl<'ctx> SymValueImpl<'ctx> {
 impl<'ctx> SymStructImpl<'ctx> {
   fn copy_value(&self) -> Self {
     Self {
-      z3_ctx: self.z3_ctx,
+      ctx: self.ctx,
       struct_type: self.struct_type.clone(),
       datatype: Rc::clone(&self.datatype),
       data: self.data.clone(),
@@ -778,7 +780,7 @@ impl<'ctx> SymStructImpl<'ctx> {
 impl<'ctx> SymVectorImpl<'ctx> {
   fn copy_value(&self) -> Self {
     Self {
-      z3_ctx: self.z3_ctx,
+      ctx: self.ctx,
       element_type: self.element_type.clone(),
       datatype: Rc::clone(&self.datatype),
       data: self.data.clone(),
@@ -928,7 +930,7 @@ impl<'ctx> SymValueImpl<'ctx> {
 impl<'ctx> SymStructImpl<'ctx> {
   fn equals(&self, other: &Self) -> SymBool<'ctx> {
     if self.len() != other.len() {
-      SymBool::from(self.z3_ctx, false);
+      SymBool::from(self.ctx.z3_ctx(), false);
     }
     SymBool::from_ast(self.data._eq(&other.data))
   }
@@ -1394,7 +1396,7 @@ impl<'ctx> SymSignerRef<'ctx> {
  *
  **************************************************************************************/
 impl<'ctx> SymLocals<'ctx> {
-  pub fn new(_z3_ctx: &'ctx Context, n: usize) -> Self {
+  pub fn new(_ctx: &'ctx Context<'ctx>, n: usize) -> Self {
     Self(Rc::new(RefCell::new(
       iter::repeat_with(|| SymValueImpl::Invalid).take(n).collect(),
     )))
@@ -1469,28 +1471,28 @@ impl<'ctx> SymLocals<'ctx> {
 **************************************************************************************/
 impl<'ctx> SymValue<'ctx> {
   pub fn from_deserialized_value(
-    z3_ctx: &'ctx Context,
+    ctx: &'ctx Context<'ctx>,
     value: Value,
-    ty: &TypeTag,
+    ty: TypeTag,
   ) -> PartialVMResult<Self> {
     match ty {
-      TypeTag::Bool => Ok(SymValue::from_bool(z3_ctx, value.value_as()?)),
-      TypeTag::U8 => Ok(SymValue::from_u8(z3_ctx, value.value_as()?)),
-      TypeTag::U64 => Ok(SymValue::from_u64(z3_ctx, value.value_as()?)),
-      TypeTag::U128 => Ok(SymValue::from_u128(z3_ctx, value.value_as()?)),
-      TypeTag::Address => Ok(SymValue::from_address(z3_ctx, value.value_as()?)),
+      TypeTag::Bool => Ok(SymValue::from_bool(ctx, value.value_as()?)),
+      TypeTag::U8 => Ok(SymValue::from_u8(ctx, value.value_as()?)),
+      TypeTag::U64 => Ok(SymValue::from_u64(ctx, value.value_as()?)),
+      TypeTag::U128 => Ok(SymValue::from_u128(ctx, value.value_as()?)),
+      TypeTag::Address => Ok(SymValue::from_address(ctx, value.value_as()?)),
       TypeTag::Vector(_) => unimplemented!(),
       TypeTag::Struct(struct_type) => Ok(SymValue::from_deserialized_struct(
-        z3_ctx,
+        ctx,
         VMValueCast::cast(value)?,
         struct_type,
       )?),
-      TypeTag::Signer => Ok(SymValue::signer(z3_ctx, value.value_as()?)),
+      TypeTag::Signer => Ok(SymValue::signer(ctx, value.value_as()?)),
     }
   }
 
   pub fn from_ast_with_type(
-    z3_ctx: &'ctx Context,
+    ctx: &'ctx Context<'ctx>,
     ast: Dynamic<'ctx>,
     ty: &TypeTag
   ) -> PartialVMResult<Self> {
@@ -1528,7 +1530,7 @@ impl<'ctx> SymValue<'ctx> {
           PartialVMError::new(StatusCode::UNKNOWN_RUNTIME_STATUS)
             .with_message(format!("{:?} can not be made into Address", ast))
         )?;
-        let addr = SymAccountAddress::from_ast(ast);
+        let addr = SymAccountAddress::from_ast(ctx, ast);
         Ok(SymValue::from_sym_address(addr))
       }
       TypeTag::Vector(ty) => {
@@ -1536,12 +1538,12 @@ impl<'ctx> SymValue<'ctx> {
           PartialVMError::new(StatusCode::UNKNOWN_RUNTIME_STATUS)
             .with_message(format!("{:?} can not be made into Vector", ast))
         )?;
-        let res = match ty.as_ref() {
-          ty @ TypeTag::U8 => SymValue::from_sym_vec_u8(SymVectorImpl::from_ast(z3_ctx, ty, ast)),
-          ty @ TypeTag::U64 => SymValue::from_sym_vec_u64(SymVectorImpl::from_ast(z3_ctx, ty, ast)),
-          ty @ TypeTag::U128 => SymValue::from_sym_vec_u128(SymVectorImpl::from_ast(z3_ctx, ty, ast)),
-          ty @ TypeTag::Bool => SymValue::from_sym_vec_bool(SymVectorImpl::from_ast(z3_ctx, ty, ast)),
-          ty @ _ => SymValue::from_sym_vector(SymVectorImpl::from_ast(z3_ctx, ty, ast)),
+        let res = match ty.as_ref().clone() {
+          ty @ TypeTag::U8 => SymValue::from_sym_vec_u8(SymVectorImpl::from_ast(ctx, ty, ast)),
+          ty @ TypeTag::U64 => SymValue::from_sym_vec_u64(SymVectorImpl::from_ast(ctx, ty, ast)),
+          ty @ TypeTag::U128 => SymValue::from_sym_vec_u128(SymVectorImpl::from_ast(ctx, ty, ast)),
+          ty @ TypeTag::Bool => SymValue::from_sym_vec_bool(SymVectorImpl::from_ast(ctx, ty, ast)),
+          ty @ _ => SymValue::from_sym_vector(SymVectorImpl::from_ast(ctx, ty, ast)),
         };
         Ok(res)
       },
@@ -1550,7 +1552,7 @@ impl<'ctx> SymValue<'ctx> {
           PartialVMError::new(StatusCode::UNKNOWN_RUNTIME_STATUS)
             .with_message(format!("{:?} can not be made into Datatype", ast))
         )?;
-        let s = SymStructImpl::from_ast(z3_ctx, layout, ast);
+        let s = SymStructImpl::from_ast(ctx, layout.clone(), ast);
         Ok(SymValue::from_sym_struct_impl(s))
       },
       TypeTag::Signer => {
@@ -1558,82 +1560,82 @@ impl<'ctx> SymValue<'ctx> {
           PartialVMError::new(StatusCode::UNKNOWN_RUNTIME_STATUS)
             .with_message(format!("{:?} can not be made into Datatype", ast))
         )?;
-        let s = SymStructImpl::from_signer_ast(z3_ctx, ast);
+        let s = SymStructImpl::from_signer_ast(ctx, ast);
         Ok(SymValue::from_sym_struct_impl(s))
       },
     }
   }
 
-  pub fn from_u8(z3_ctx: &'ctx Context, value: u8) -> Self {
-    SymValue(SymValueImpl::U8(SymU8::from(z3_ctx, value)))
+  pub fn from_u8(ctx: &'ctx Context<'ctx>, value: u8) -> Self {
+    SymValue(SymValueImpl::U8(SymU8::from(ctx.z3_ctx(), value)))
   }
 
   pub fn from_sym_u8(sym: SymU8<'ctx>) -> Self {
     SymValue(SymValueImpl::U8(sym))
   }
 
-  pub fn new_u8(z3_ctx: &'ctx Context, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U8(SymU8::new(z3_ctx, prefix)))
+  pub fn new_u8(ctx: &'ctx Context<'ctx>, prefix: &str) -> Self {
+    SymValue(SymValueImpl::U8(SymU8::new(ctx.z3_ctx(), prefix)))
   }
 
-  pub fn from_u64(z3_ctx: &'ctx Context, value: u64) -> Self {
-    SymValue(SymValueImpl::U64(SymU64::from(z3_ctx, value)))
+  pub fn from_u64(ctx: &'ctx Context<'ctx>, value: u64) -> Self {
+    SymValue(SymValueImpl::U64(SymU64::from(ctx.z3_ctx(), value)))
   }
 
   pub fn from_sym_u64(sym: SymU64<'ctx>) -> Self {
     SymValue(SymValueImpl::U64(sym))
   }
 
-  pub fn new_u64(z3_ctx: &'ctx Context, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U64(SymU64::new(z3_ctx, prefix)))
+  pub fn new_u64(ctx: &'ctx Context<'ctx>, prefix: &str) -> Self {
+    SymValue(SymValueImpl::U64(SymU64::new(ctx.z3_ctx(), prefix)))
   }
 
-  pub fn from_u128(z3_ctx: &'ctx Context, value: u128) -> Self {
-    SymValue(SymValueImpl::U128(SymU128::from(z3_ctx, value)))
+  pub fn from_u128(ctx: &'ctx Context<'ctx>, value: u128) -> Self {
+    SymValue(SymValueImpl::U128(SymU128::from(ctx.z3_ctx(), value)))
   }
 
   pub fn from_sym_u128(sym: SymU128<'ctx>) -> Self {
     SymValue(SymValueImpl::U128(sym))
   }
 
-  pub fn new_u128(z3_ctx: &'ctx Context, prefix: &str) -> Self {
-    SymValue(SymValueImpl::U128(SymU128::new(z3_ctx, prefix)))
+  pub fn new_u128(ctx: &'ctx Context<'ctx>, prefix: &str) -> Self {
+    SymValue(SymValueImpl::U128(SymU128::new(ctx.z3_ctx(), prefix)))
   }
 
-  pub fn from_bool(z3_ctx: &'ctx Context, value: bool) -> Self {
-    SymValue(SymValueImpl::Bool(SymBool::from(z3_ctx, value)))
+  pub fn from_bool(ctx: &'ctx Context<'ctx>, value: bool) -> Self {
+    SymValue(SymValueImpl::Bool(SymBool::from(ctx.z3_ctx(), value)))
   }
 
   pub fn from_sym_bool(sym: SymBool<'ctx>) -> Self {
     SymValue(SymValueImpl::Bool(sym))
   }
 
-  pub fn new_bool(z3_ctx: &'ctx Context, prefix: &str) -> Self {
-    SymValue(SymValueImpl::Bool(SymBool::new(z3_ctx, prefix)))
+  pub fn new_bool(ctx: &'ctx Context<'ctx>, prefix: &str) -> Self {
+    SymValue(SymValueImpl::Bool(SymBool::new(ctx.z3_ctx(), prefix)))
   }
 
-  pub fn new_vector(z3_ctx: &'ctx Context, prefix: &str, vtag: &TypeTag) -> Self {
-    let v = SymVectorImpl::new_ast(z3_ctx, prefix, vtag);
+  pub fn new_vector(ctx: &'ctx Context<'ctx>, prefix: &str, vtag: TypeTag) -> Self {
+    let v = SymVectorImpl::new_ast(ctx, prefix, vtag.clone());
     let container = match vtag {
       TypeTag::Address | TypeTag::Signer => panic!("Should not symbolize address"),
       TypeTag::Bool => SymContainer::VecBool(Rc::new(RefCell::new(v))),
       TypeTag::U8 => SymContainer::VecU8(Rc::new(RefCell::new(v))),
-      TypeTag::U64 => SymContainer::VecU8(Rc::new(RefCell::new(v))),
-      TypeTag::U8 => SymContainer::VecU8(Rc::new(RefCell::new(v))),
+      TypeTag::U64 => SymContainer::VecU64(Rc::new(RefCell::new(v))),
+      TypeTag::U128 => SymContainer::VecU128(Rc::new(RefCell::new(v))),
       _ => SymContainer::Vec(Rc::new(RefCell::new(v)))
     };
     SymValue(SymValueImpl::Container(container))
   }
 
-  pub fn new_struct(z3_ctx: &'ctx Context, prefix: &str, stag: &StructTag) -> Self {
+  pub fn new_struct(ctx: &'ctx Context<'ctx>, prefix: &str, stag: StructTag) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::Struct(Rc::new(RefCell::new(
-      SymStructImpl::new_ast(z3_ctx, prefix, stag),
+      SymStructImpl::new_ast(ctx, prefix, stag),
     )))))
   }
 
-  pub fn from_address(z3_ctx: &'ctx Context, address: AccountAddress) -> Self {
+  pub fn from_address(ctx: &'ctx Context<'ctx>, address: AccountAddress) -> Self {
     SymValue(SymValueImpl::Address(SymAccountAddress::new(
-      z3_ctx, address,
+      ctx, address,
     )))
   }
 
@@ -1641,16 +1643,16 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::Address(address))
   }
 
-  pub fn signer(z3_ctx: &'ctx Context, address: AccountAddress) -> Self {
-    SymValue::sym_signer(SymAccountAddress::new(z3_ctx, address))
+  pub fn signer(ctx: &'ctx Context<'ctx>, address: AccountAddress) -> Self {
+    SymValue::sym_signer(SymAccountAddress::new(ctx, address))
   }
 
   pub fn sym_signer(address: SymAccountAddress<'ctx>) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::signer(address)))
   }
 
-  pub fn signer_reference(z3_ctx: &'ctx Context, address: AccountAddress) -> Self {
-    SymValue::sym_signer_reference(SymAccountAddress::new(z3_ctx, address))
+  pub fn signer_reference(ctx: &'ctx Context<'ctx>, address: AccountAddress) -> Self {
+    SymValue::sym_signer_reference(SymAccountAddress::new(ctx, address))
   }
 
   pub fn sym_signer_reference(address: SymAccountAddress<'ctx>) -> Self {
@@ -1661,17 +1663,17 @@ impl<'ctx> SymValue<'ctx> {
   }
 
   pub fn from_deserialized_struct(
-    z3_ctx: &'ctx Context,
+    ctx: &'ctx Context<'ctx>,
     s: Struct,
-    ty: &StructTag,
+    ty: StructTag,
   ) -> PartialVMResult<Self> {
     let fields: Vec<SymValue> = s
       .unpack()?
       .into_iter()
       .enumerate()
-      .map(|(idx, v)| SymValue::from_deserialized_value(z3_ctx, v, &ty.type_params[idx]))
+      .map(|(idx, v)| SymValue::from_deserialized_value(ctx, v, ty.type_params[idx].clone()))
       .collect::<PartialVMResult<_>>()?;
-    Ok(SymValue::from_sym_struct(SymStruct::pack(z3_ctx, &ty, fields)?))
+    Ok(SymValue::from_sym_struct(SymStruct::pack(ctx, ty, fields)?))
   }
 
   fn from_sym_struct_impl(s: SymStructImpl<'ctx>) -> Self {
@@ -2308,7 +2310,7 @@ impl<'ctx> SymVectorRef<'ctx> {
     Ok(SymNativeResult::ok(
       cost,
       vec![SymValue::from_ast_with_type(
-        context.get_z3_ctx(),
+        context.get_ctx(),
         res, &vector.element_type,
       )?],
     ))
@@ -2353,19 +2355,19 @@ impl<'ctx> SymVector<'ctx> {
     type_param: &Type,
     context: &impl SymNativeContext<'ctx>,
   ) -> PartialVMResult<SymNativeResult<'ctx>> {
-    let z3_ctx = context.get_z3_ctx();
+    let ctx = context.get_ctx();
     let container = match type_param {
-      Type::U8 => SymValue::from_sym_vec_u8(SymVectorImpl::empty(z3_ctx, &TypeTag::U8)),
-      Type::U64 => SymValue::from_sym_vec_u64(SymVectorImpl::empty(z3_ctx, &TypeTag::U64)),
-      Type::U128 => SymValue::from_sym_vec_u128(SymVectorImpl::empty(z3_ctx, &TypeTag::U128)),
-      Type::Bool => SymValue::from_sym_vec_bool(SymVectorImpl::empty(z3_ctx, &TypeTag::Bool)),
-      Type::Address => SymValue::from_sym_vec_address(SymVectorImpl::empty(z3_ctx, &TypeTag::Address)),
+      Type::U8 => SymValue::from_sym_vec_u8(SymVectorImpl::empty(ctx, TypeTag::U8)),
+      Type::U64 => SymValue::from_sym_vec_u64(SymVectorImpl::empty(ctx, TypeTag::U64)),
+      Type::U128 => SymValue::from_sym_vec_u128(SymVectorImpl::empty(ctx, TypeTag::U128)),
+      Type::Bool => SymValue::from_sym_vec_bool(SymVectorImpl::empty(ctx, TypeTag::Bool)),
+      Type::Address => SymValue::from_sym_vec_address(SymVectorImpl::empty(ctx, TypeTag::Address)),
 
       Type::Signer | Type::Vector(_) | Type::Struct(_) | Type::StructInstantiation(_, _) => {
         SymValue(SymValueImpl::Container(SymContainer::Vec(Rc::new(RefCell::new(
           SymVectorImpl::empty(
-            z3_ctx,
-            &context.type_to_type_tag(type_param)?.ok_or(
+            ctx,
+            context.type_to_type_tag(type_param)?.ok_or(
               PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
                 .with_message(format!("no type tag for type {:?}", type_param)),
             )?),
@@ -2494,11 +2496,11 @@ impl<'ctx> SymGlobalValue<'ctx> {
 **************************************************************************************/
 impl<'ctx> SymStruct<'ctx> {
   pub fn pack<I: IntoIterator<Item = SymValue<'ctx>>>(
-    z3_ctx: &'ctx Context,
-    ty: &StructTag,
+    ctx: &'ctx Context<'ctx>,
+    ty: StructTag,
     vals: I
   ) -> PartialVMResult<Self> {
-    Ok(Self(SymStructImpl::pack(z3_ctx, ty, vals)?))
+    Ok(Self(SymStructImpl::pack(ctx, ty, vals)?))
   }
 
   pub fn unpack(self) -> PartialVMResult<impl Iterator<Item = SymValue<'ctx>>> {
@@ -2514,7 +2516,8 @@ impl<'ctx> SymStruct<'ctx> {
 *   source (a.k.a. storage), and references to be taken from them. At the end of the
 *   transaction execution the dirty ones can be identified and wrote back to storage.
 *
-**************************************************************************************/#[allow(clippy::unnecessary_wraps)]
+**************************************************************************************/
+#[allow(clippy::unnecessary_wraps)]
 impl<'ctx> SymGlobalValueImpl<'ctx> {
   fn cached(val: SymValueImpl<'ctx>, status: GlobalDataStatus) -> PartialVMResult<Self> {
     match val {
@@ -2623,7 +2626,7 @@ impl<'ctx> SymGlobalValueImpl<'ctx> {
     }
   }
 
-  fn clone_for_symbolic_state_fork(&self) -> Self {
+  fn fork(&self) -> Self {
     match self {
       SymGlobalValueImpl::None => SymGlobalValueImpl::None,
       SymGlobalValueImpl::Fresh { resource } => SymGlobalValueImpl::Fresh {
@@ -2679,8 +2682,8 @@ impl<'ctx> SymGlobalValue<'ctx> {
     self.0.is_mutated()
   }
   
-  pub fn clone_for_symbolic_state_fork(&self) -> Self {
-    Self(self.0.clone_for_symbolic_state_fork())
+  pub fn fork(&self) -> Self {
+    Self(self.0.fork())
   }
 }
 
@@ -2850,11 +2853,11 @@ impl<'ctx> SymValue<'ctx> {
     })
   }
 
-  pub fn deserialize_constant(z3_ctx: &'ctx Context, constant: &Constant) -> Option<SymValue<'ctx>> {
+  pub fn deserialize_constant(ctx: &'ctx Context<'ctx>, constant: &Constant) -> Option<SymValue<'ctx>> {
     let layout = Self::constant_sig_token_to_layout(&constant.type_)?;
     let tag = Self::constant_sig_token_to_tag(&constant.type_)?;
     let v = Value::simple_deserialize(&constant.data, &layout)?;
-    SymValue::from_deserialized_value(z3_ctx, v, &tag).ok()
+    SymValue::from_deserialized_value(ctx, v, tag).ok()
   }
 
   // pub fn serialize_constant(type_: SignatureToken, value: Value) -> Option<Constant> {

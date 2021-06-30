@@ -33,17 +33,17 @@ use z3::{
 };
 use z3_sys::AstKind;
 
-pub struct Specification<'a, 'ctx> {
-  pre: Box<dyn Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
-  post: Box<dyn Fn(&[SymValue<'ctx>], &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
-  abort: Box<dyn Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
+pub struct Specification<'a> {
+  pre: Box<dyn for<'ctx> Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
+  post: Box<dyn for<'ctx> Fn(&[SymValue<'ctx>], &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
+  abort: Box<dyn for<'ctx> Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a>,
 }
 
-impl<'a, 'ctx> Specification<'a, 'ctx> {
+impl<'a> Specification<'a> {
   pub fn new(
-    pre: impl Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
-    post: impl Fn(&[SymValue<'ctx>], &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
-    abort: impl Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
+    pre: impl for<'ctx> Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
+    post: impl for<'ctx> Fn(&[SymValue<'ctx>], &[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
+    abort: impl for<'ctx> Fn(&[SymValue<'ctx>]) -> SymBool<'ctx> + 'a,
   ) -> Self {
     Self {
       pre: Box::new(pre),
@@ -52,41 +52,39 @@ impl<'a, 'ctx> Specification<'a, 'ctx> {
     }
   }
 
-  pub fn pre(&self, args: &[SymValue<'ctx>]) -> SymBool<'ctx> {
+  pub fn pre<'ctx>(&self, args: &[SymValue<'ctx>]) -> SymBool<'ctx> {
     (self.pre)(args)
   }
 
-  pub fn post(&self, args: &[SymValue<'ctx>], returns: &[SymValue<'ctx>]) -> SymBool<'ctx> {
+  pub fn post<'ctx>(&self, args: &[SymValue<'ctx>], returns: &[SymValue<'ctx>]) -> SymBool<'ctx> {
     (self.post)(args, returns)
   }
 
-  pub fn abort(&self, args: &[SymValue<'ctx>]) -> SymBool<'ctx> {
+  pub fn abort<'ctx>(&self, args: &[SymValue<'ctx>]) -> SymBool<'ctx> {
     (self.abort)(args)
   }
 }
 
-pub struct VerificationPlugin<'a, 'ctx> {
-  z3_ctx: &'ctx Context,
-  target: Specification<'a, 'ctx>,
-  specs: HashMap<Identifier, Specification<'a, 'ctx>>,
+pub struct VerificationPlugin<'a> {
+  target: Specification<'a>,
+  specs: HashMap<Identifier, Specification<'a>>,
 }
 
-impl<'a, 'ctx> VerificationPlugin<'a, 'ctx> {
-  pub fn new(z3_ctx: &'ctx Context, target: Specification<'a, 'ctx>) -> Self {
+impl<'a> VerificationPlugin<'a> {
+  pub fn new(target: Specification<'a>) -> Self {
     Self {
-      z3_ctx,
       target,
       specs: HashMap::new(),
     }
   }
 
-  pub fn add_spec(&mut self, func_name: Identifier, spec: Specification<'a, 'ctx>) {
+  pub fn add_spec(&mut self, func_name: Identifier, spec: Specification<'a>) {
     self.specs.insert(func_name, spec);
   }
 }
 
-impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
-  fn on_before_call(
+impl<'a> Plugin for VerificationPlugin<'a> {
+  fn on_before_call<'ctx>(
     &self,
     plugin_ctx: &mut dyn PluginContext<'ctx>,
     func: &Function,
@@ -96,7 +94,7 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
       Some(spec) => {
         let arg_count = func.arg_count();
         let args = plugin_ctx.operand_stack_mut().popn(arg_count.try_into().unwrap())?;
-        let z3_ctx = plugin_ctx.z3_ctx();
+        let ctx = plugin_ctx.ctx();
         let solver = plugin_ctx.solver();
         solver.push();
         solver.assert(&spec.pre(args.as_slice()).as_inner().not());
@@ -111,10 +109,10 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
         // TODO: also model other type of returns
         for sig in &func.returns().0 {
           let val = match sig {
-            SignatureToken::Bool => SymValue::new_bool(z3_ctx, &prefix),
-            SignatureToken::U8 => SymValue::new_u8(z3_ctx, &prefix),
-            SignatureToken::U64 => SymValue::new_u64(z3_ctx, &prefix),
-            SignatureToken::U128 => SymValue::new_u128(z3_ctx, &prefix),
+            SignatureToken::Bool => SymValue::new_bool(ctx, &prefix),
+            SignatureToken::U8 => SymValue::new_u8(ctx, &prefix),
+            SignatureToken::U64 => SymValue::new_u64(ctx, &prefix),
+            SignatureToken::U128 => SymValue::new_u128(ctx, &prefix),
             _ => unimplemented!(),
           };
           returns.push(val);
@@ -134,12 +132,13 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
 
   // fn on_after_call capture the return value
 
-  fn on_after_execute(
+  fn on_after_execute<'ctx>(
     &self,
     plugin_ctx: &mut dyn PluginContext<'ctx>,
     // args: &[SymValue<'ctx>],
     return_values: &[SymValue<'ctx>],
   ) -> VMResult<()> {
+    let z3_ctx = plugin_ctx.ctx().z3_ctx();
     let solver = plugin_ctx.solver();
     solver.push();
     solver.assert(self.target.post(&[], return_values).as_inner()); // TODO: args should not be empty!!
@@ -156,23 +155,23 @@ impl<'a, 'ctx> Plugin<'ctx> for VerificationPlugin<'a, 'ctx> {
     solver.pop(1);
     let path_conditions = plugin_ctx.path_conditions();
     let spec_conditions = plugin_ctx.spec_conditions();
-    let pc = Bool::and(self.z3_ctx,
+    let pc = Bool::and(z3_ctx,
       &path_conditions.iter()
         .chain(spec_conditions.iter().map(|(_, s)| s)).map(|v| v.as_inner())
         .collect::<Vec<_>>());
     for (spec_inputs, spec) in plugin_ctx.spec_conditions().iter() {
       let spec_vars = collect_variables(spec.as_inner());
-      let solver = Solver::new(self.z3_ctx);
-      let projected = project(self.z3_ctx, &pc, &spec_vars).expect("Quantifier Elimination Failed!");
+      let solver = Solver::new(z3_ctx);
+      let projected = project(z3_ctx, &pc, &spec_vars).expect("Quantifier Elimination Failed!");
       let phi = spec.as_inner();
       solver.assert(phi);
       solver.assert(&projected.not());
       match solver.check() {
         SatResult::Sat => {
           let inputs = HashSet::from_iter(spec_inputs.iter().map(|v| v.as_ast().unwrap()));
-          let projected_input = project(self.z3_ctx, &pc, &inputs).expect("Quantifier Elimination Failed!");
-          let suggested = Bool::and(self.z3_ctx, &[
-            &projected_input.implies(&Bool::and(self.z3_ctx, &[&projected.not(), phi]).simplify()),
+          let projected_input = project(z3_ctx, &pc, &inputs).expect("Quantifier Elimination Failed!");
+          let suggested = Bool::and(z3_ctx, &[
+            &projected_input.implies(&Bool::and(z3_ctx, &[&projected.not(), phi]).simplify()),
             &projected_input.not().implies(phi)]);
           println!("-------SUGGESTION BEGIN-------");
           println!("previous condition:");
