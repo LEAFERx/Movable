@@ -14,7 +14,7 @@ language-e2e-tests = { path = "../../diem/language/testing-infra/e2e-tests" }
 vm = { path = "../../diem/language/vm" }
 diem-types = { path = "../../diem/types" }
 
-z3 = "0.10.0"
+z3 = "0.11.0"
 # z3 = { path = "/root/z3.rs/z3" }
 serde = { version = "1.0.110", default-features = false }
 

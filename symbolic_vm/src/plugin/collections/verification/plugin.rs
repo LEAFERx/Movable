@@ -208,7 +208,7 @@ fn project<'ctx>(ctx: &'ctx Context, cond: &Bool<'ctx>, vars: &HashSet<Dynamic<'
   let tactic = Tactic::new(ctx, "qe"); //.and_then(&Tactic::new(ctx, "simplify"));
   let goal = Goal::new(ctx, false, false, false);
   let bounds = collect_variables(cond);
-  let bounds = bounds.difference(vars).collect::<Vec<_>>();
+  let bounds = bounds.difference(vars).map(|v| v as &dyn Ast<'ctx>).collect::<Vec<_>>();
   goal.assert(&exists_const(ctx, &bounds, &[], cond));
   let result = tactic.apply(&goal, None)
     .list_subgoals().collect::<Vec<Goal>>();

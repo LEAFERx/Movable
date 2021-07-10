@@ -212,12 +212,12 @@ impl<'ctx> VMRuntime<'ctx> {
                 println!("Function returned without abortion.");
                 println!("Args:");
                 for (idx, val) in args.iter().enumerate() {
-                  println!("Index {}: {:#?}", idx, model.eval(val));
+                  println!("Index {}: {:#?}", idx, model.eval(val, true));
                 }
                 println!("Returns:");
                 for (idx, val) in return_values.into_iter().enumerate() {
                   let ast = val.as_ast().map_err(|e| e.finish(Location::Undefined))?;
-                  println!("Index {}: {:#?}", idx, model.eval(&ast));
+                  println!("Index {}: {:#?}", idx, model.eval(&ast, true));
                 }
                 println!("-------REPORT END---------");
               },

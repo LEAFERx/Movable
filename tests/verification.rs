@@ -26,10 +26,10 @@ fn exec<'a, 'ctx>(path: &str, func: &str, z3_ctx: &'ctx Context, p: Verification
   let module = CompiledModule::deserialize(blob.as_slice())
     .expect("Failed to deserialize bytecode. File may be corrupted.");
 
-  let mut engine = Engine::from_genesis(z3_ctx);
+  let mut engine = Engine::from_genesis();
   engine.add_module(&module.self_id(), blob);
   engine.add_plugin(p);
-  engine.execute_function(&module.self_id(), &function_name);
+  engine.execute_function(z3_ctx, &module.self_id(), &function_name);
 }
 
 struct AbsSpec<'a> {

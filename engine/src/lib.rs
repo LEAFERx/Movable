@@ -30,18 +30,16 @@ pub struct EngineConfig {
   module_list: Vec<ModuleList>,
 }
 
-pub struct Engine<'a, 'ctx> {
-  z3_ctx: &'ctx Context,
+pub struct Engine<'a> {
   data_store: FakeDataStore,
   plugin_manager: PluginManager<'a>,
 }
 
-impl<'a, 'ctx> Engine<'a, 'ctx> {
-  pub fn from_genesis(z3_ctx: &'ctx Context) -> Self {
+impl<'a> Engine<'a> {
+  pub fn from_genesis() -> Self {
     let mut data_store = FakeDataStore::default();
     data_store.add_write_set(GENESIS_CHANGE_SET.clone().write_set());
     Engine {
-      z3_ctx,
       data_store,
       plugin_manager: PluginManager::new(),
     }
@@ -55,8 +53,8 @@ impl<'a, 'ctx> Engine<'a, 'ctx> {
     self.plugin_manager.add_plugin(plugin)
   }
   
-  pub fn execute_function(&mut self, module: &ModuleId, function_name: &IdentStr) {
-    let vm = SymbolicVM::new(self.z3_ctx);
+  pub fn execute_function<'ctx>(&mut self, z3_ctx: &'ctx Context, module: &ModuleId, function_name: &IdentStr) {
+    let vm = SymbolicVM::new(z3_ctx);
     let sender = AccountAddress::random();
     let session = vm.new_session(&self.data_store);
 

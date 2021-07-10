@@ -48,7 +48,7 @@ fn main() {
   let z3_cfg = Config::new();
   let z3_ctx = Context::new(&z3_cfg);
   
-  let mut engine = Engine::from_genesis(&z3_ctx);
+  let mut engine = Engine::from_genesis();
   engine.add_module(&module.self_id(), blob);
-  engine.execute_function(&module.self_id(), &function_name);
+  engine.execute_function(&z3_ctx, &module.self_id(), &function_name);
 }

@@ -363,7 +363,7 @@ impl<'ctx> SymStructImpl<'ctx> {
     z3_ctx: &'ctx Context,
     ty_ctx: &TypeContext<'ctx>, 
     struct_type: StructTag,
-    fields: &[&Dynamic<'ctx>],
+    fields: &[&dyn Ast<'ctx>],
   ) -> Self {
     let datatype = ty_ctx.struct_tag_to_datatype_sort(struct_type.clone());
     let data = datatype.variants[0].constructor.apply(fields).as_datatype().unwrap();
@@ -434,17 +434,17 @@ impl<'ctx> SymStructImpl<'ctx> {
   fn set_raw(&mut self, idx: usize, val: Dynamic<'ctx>) -> PartialVMResult<()> {
     // TODO: find a better way to set, maybe try to improve z3.rs
     let len = self.len();
-    let mut fields = Vec::with_capacity(len);
+    let mut fields: Vec<Box<dyn Ast<'ctx>>> = Vec::with_capacity(len);
     for i in 0..len {
       if i == idx {
         // Clone here is actually unnecessary but needed
         // But clone on ast is just a shallow copy, so it is correct
-        fields.push(val.clone());
+        fields.push(Box::new(val.clone()));
       } else {
-        fields.push(self.get_raw(i)?);
+        fields.push(Box::new(self.get_raw(i)?));
       }
     }
-    let field_refs = fields.iter().collect::<Vec<_>>();
+    let field_refs: Vec<&dyn Ast<'ctx>> = fields.iter().map(|b| b.as_ref()).collect::<Vec<_>>();
     self.data = self
       .datatype
       .variants[0].constructor.apply(field_refs.as_slice())
@@ -479,13 +479,14 @@ impl<'ctx> SymStructImpl<'ctx> {
     values: I
   ) -> PartialVMResult<Self> {
     let fields = values.into_iter()
-      .map(|v| v.as_ast()).collect::<PartialVMResult<Vec<_>>>()?;
-    let field_refs = fields.iter().collect::<Vec<_>>();
+      .map(|v| v.as_ast()).collect::<PartialVMResult<Vec<_>>>()?
+      .into_iter().map(|v| Box::new(v) as Box<dyn Ast<'ctx>>).collect::<Vec<_>>();
+    let field_refs = fields.iter().map(|b| b.as_ref()).collect::<Vec<_>>();
     Ok(Self::new(
       z3_ctx,
       ty_ctx,
       struct_type,
-      field_refs.as_slice(),
+      &field_refs,
     ))
   }
 
@@ -567,7 +568,7 @@ impl<'ctx> SymVectorImpl<'ctx> {
     }
     let symlen = BV::from_u64(z3_ctx, values.len() as u64, 64);
     let data = datatype
-      .variants[0].constructor.apply(&[&arr.into(), &symlen.into()])
+      .variants[0].constructor.apply(&[&arr, &symlen])
       .as_datatype().unwrap();
 
     Self {
