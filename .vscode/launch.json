@@ -36,7 +36,7 @@
         }
       },
       "args": [
-        "testsuites/abs.mv",
+        "testsuites/testvec.mv",
         "-f",
         "f"
       ],

@@ -374,27 +374,30 @@ fn vector_function_decls<'ctx>(z3_ctx: &'ctx Z3Context, tsort: &Sort<'ctx>, vsor
   let len = RecFuncDecl::new(z3_ctx, "VecLen", &[&vsort.sort], &Sort::bitvector(z3_ctx, 64));
   len.add_def(&[&v], &v._eq(&nil).ite(
     &zero,
-    &Dynamic::from(len.apply(&[&v]).as_bv().unwrap() + 1u64),
-  ).simplify());
+    &Dynamic::from(len.apply(&[&vsort.variants[1].accessors[1].apply(&[&v])]).as_bv().unwrap() + 1u64),
+  ));
   
   let select = RecFuncDecl::new(z3_ctx, "VecSelect", &[&vsort.sort, &Sort::bitvector(z3_ctx, 64)], tsort);
   select.add_def(&[&v, &idx], &idx._eq(&zero).ite(
     &vsort.variants[1].accessors[0].apply(&[&v]),
-    &select.apply(&[&v, &Dynamic::from(idx.as_bv().unwrap() - 1u64).simplify()]),
-  ).simplify());
+    &select.apply(&[
+      &vsort.variants[1].accessors[1].apply(&[&v]),
+      &Dynamic::from(idx.as_bv().unwrap() - 1u64)
+    ]),
+  ));
   
-  let store = RecFuncDecl::new(z3_ctx, "VecStore", &[&vsort.sort, &tsort], &vsort.sort);
+  let store = RecFuncDecl::new(z3_ctx, "VecStore", &[&vsort.sort, &Sort::bitvector(z3_ctx, 64), &tsort], &vsort.sort);
   store.add_def(&[&v, &idx, &elem], &idx._eq(&zero).ite(
     &vsort.variants[1].constructor.apply(&[&elem, &v]),
     &vsort.variants[1].constructor.apply(&[
       &vsort.variants[1].accessors[0].apply(&[&v]),
       &store.apply(&[
         &vsort.variants[1].accessors[1].apply(&[&v]),
-        &Dynamic::from(idx.as_bv().unwrap() - 1u64).simplify(),
+        &Dynamic::from(idx.as_bv().unwrap() - 1u64),
         &elem,
       ]),
     ]),
-  ).simplify());
+  ));
   
   let push = RecFuncDecl::new(z3_ctx, "VecPush", &[&vsort.sort, tsort], &vsort.sort);
   push.add_def(&[&v, &elem], &v._eq(&nil).ite(
@@ -406,7 +409,7 @@ fn vector_function_decls<'ctx>(z3_ctx: &'ctx Z3Context, tsort: &Sort<'ctx>, vsor
         &elem,
       ]),
     ]),
-  ).simplify());
+  ));
   
   let pop_vec = RecFuncDecl::new(z3_ctx, "VecPopVec", &[&vsort.sort], &vsort.sort);
   pop_vec.add_def(&[&v], &nil._eq(
@@ -415,9 +418,9 @@ fn vector_function_decls<'ctx>(z3_ctx: &'ctx Z3Context, tsort: &Sort<'ctx>, vsor
     &nil,
     &vsort.variants[1].constructor.apply(&[
       &vsort.variants[1].accessors[0].apply(&[&v]),
-      &pop_vec.apply(&[&v]),
+      &pop_vec.apply(&[&vsort.variants[1].accessors[1].apply(&[&v])]),
     ]),
-  ).simplify());
+  ));
   
   let pop_res = RecFuncDecl::new(z3_ctx, "VecPopRes", &[&vsort.sort], &tsort);
   pop_res.add_def(&[&v], &nil._eq(
@@ -425,7 +428,7 @@ fn vector_function_decls<'ctx>(z3_ctx: &'ctx Z3Context, tsort: &Sort<'ctx>, vsor
   ).ite(
     &vsort.variants[1].accessors[0].apply(&[&v]),
     &pop_res.apply(&[&vsort.variants[1].accessors[1].apply(&[&v])]),
-  ).simplify());
+  ));
 
   VectorFunctionDecls {
     empty: Rc::new(empty),

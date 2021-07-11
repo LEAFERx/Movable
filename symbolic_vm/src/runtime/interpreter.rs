@@ -252,7 +252,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               continue;
             }
             let frame = self
-              .make_call_frame(self.get_z3_ctx(), func, vec![])
+              .make_call_frame(self.get_z3_ctx(), func, ty_args)
               .map_err(|err| self.maybe_core_dump(err, &current_frame))?;
             self.call_stack.push(current_frame).map_err(|frame| {
               let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
@@ -298,6 +298,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
             if self.solver.check() == SatResult::Sat {
               self.path_conditions.push(condition.clone());
               forks.push(self);
+              println!("Defualt path SAT");
             }
             
             let neg_condition_ast = condition.as_inner().not();
@@ -306,6 +307,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
             if forked_interp.solver.check() == SatResult::Sat {
               forked_interp.path_conditions.push(neg_condition);
               forks.push(forked_interp);
+              println!("Forked path SAT");
             }
             return Ok(SymInterpreterExecutionResult::Fork(forks));
           },

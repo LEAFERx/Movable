@@ -37,7 +37,7 @@ use z3::{
 };
 
 use crate::{
-  runtime::context::TypeContext,
+  runtime::context::{TypeContext, VectorFunctionDecls},
   types::{
     natives::{SymNativeContext, SymNativeResult},
     values::{
@@ -171,6 +171,7 @@ pub(crate) struct SymVectorImpl<'ctx> {
   z3_ctx: &'ctx Context,
   element_type: TypeTag,
   datatype: Rc<DatatypeSort<'ctx>>,
+  func_decls: Rc<VectorFunctionDecls<'ctx>>,
   data: Datatype<'ctx>,
 }
 
@@ -506,51 +507,21 @@ impl<'ctx> SymStructImpl<'ctx> {
 }
 
 impl<'ctx> SymVectorImpl<'ctx> {
-  fn make(&self, array: &Array<'ctx>, len: &BV<'ctx>) -> Datatype<'ctx> {
-    let array = Dynamic::from_ast(array);
-    let len = Dynamic::from_ast(len);
-    self.datatype
-      .variants[0].constructor.apply(&[&array, &len])
-      .as_datatype().unwrap()
-  }
-
-  fn array(&self) -> Array<'ctx> {
-    let data = Dynamic::from_ast(&self.data);
-    self.datatype
-      .variants[0].accessors[0]
-      .apply(&[&data]).as_array().unwrap()
-  }
-
-  fn symlen(&self) -> BV<'ctx> {
-    let data = Dynamic::from_ast(&self.data);
-    self.datatype
-      .variants[0].accessors[1]
-      .apply(&[&data]).as_bv().unwrap()
-  }
-
-  fn set_array(&mut self, array: &Array<'ctx>) {
-    self.data = self.make(array, &self.symlen());
-  }
-
-  fn set_symlen(&mut self, len: &BV<'ctx>) {
-    self.data = self.make(&self.array(), len);
+  fn len(&self) -> BV<'ctx> {
+    let v = Dynamic::from_ast(&self.data);
+    self.func_decls.len.apply(&[&v]).as_bv().unwrap()
   }
 
   fn get_raw(&self, idx: &BV<'ctx>) -> Dynamic<'ctx> {
-    self.array().select(idx)
+    let v = Dynamic::from_ast(&self.data);
+    let idx = Dynamic::from_ast(idx);
+    self.func_decls.select.apply(&[&v, &idx])
   }
 
   fn set_raw(&mut self, idx: &BV<'ctx>, val: &Dynamic<'ctx>) {
-    let arr = self.array().store(idx, val);
-    self.set_array(&arr);
-  }
-  
-  fn set_multiple_raw(&mut self, idx_val_pairs: &[(&BV<'ctx>, &Dynamic<'ctx>)]) {
-    let mut v = self.array();
-    for (idx, val) in idx_val_pairs {
-      v = v.store(*idx, *val);
-    }
-    self.set_array(&v.into());
+    let v = Dynamic::from_ast(&self.data);
+    let idx = Dynamic::from_ast(idx);
+    self.data = self.func_decls.store.apply(&[&v, &idx, val]).as_datatype().unwrap();
   }
 
   fn new(
@@ -561,20 +532,19 @@ impl<'ctx> SymVectorImpl<'ctx> {
   ) -> Self {
     let range_sort = ty_ctx.type_tag_to_sort(element_type.clone());
     let datatype = ty_ctx.vec_to_datatype_sort(element_type.clone());
+    let func_decls = ty_ctx.vec_func_decls(element_type.clone());
 
-    let mut arr = Array::fresh_const(z3_ctx, "vector", &Sort::bitvector(z3_ctx, 64), &range_sort);
+    let mut data = datatype.variants[0].constructor.apply(&[]);
     for i in 0..values.len() {
-      arr = arr.store(&BV::from_u64(z3_ctx, i as u64, 64), values[i]);
+      data = datatype.variants[1].constructor.apply(&[values[i], &data]);
     }
-    let symlen = BV::from_u64(z3_ctx, values.len() as u64, 64);
-    let data = datatype
-      .variants[0].constructor.apply(&[&arr, &symlen])
-      .as_datatype().unwrap();
+    let data = data.as_datatype().unwrap();
 
     Self {
       z3_ctx,
       element_type,
       datatype,
+      func_decls,
       data,
     }
   }
@@ -586,12 +556,14 @@ impl<'ctx> SymVectorImpl<'ctx> {
     element_type: TypeTag,
   ) -> Self {
     let datatype = ty_ctx.vec_to_datatype_sort(element_type.clone());
+    let func_decls = ty_ctx.vec_func_decls(element_type.clone());
     let data = Datatype::fresh_const(z3_ctx, prefix, &datatype.sort);
 
     Self {
       z3_ctx,
       element_type,
       datatype,
+      func_decls,
       data,
     }
   }
@@ -629,10 +601,12 @@ impl<'ctx> SymVectorImpl<'ctx> {
 
   fn from_ast(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, element_type: TypeTag, ast: Datatype<'ctx>) -> Self {
     let datatype = ty_ctx.vec_to_datatype_sort(element_type.clone());
+    let func_decls = ty_ctx.vec_func_decls(element_type.clone());
     Self {
       z3_ctx,
       element_type,
       datatype,
+      func_decls,
       data: ast,
     }
   }
@@ -642,19 +616,14 @@ impl<'ctx> SymVectorImpl<'ctx> {
   }
 
   fn push(&mut self, val: &Dynamic<'ctx>) {
-    let len = self.symlen();
-    let v = self.array();
-    let v = v.store(&Dynamic::from_ast(&len), val);
-    let updated_len = len.bvadd(&BV::from_u64(self.z3_ctx, 1, 64)).simplify();
-    self.data = self.make(&v.into(), &updated_len.into());
+    let v = Dynamic::from_ast(&self.data);
+    self.data = self.func_decls.push.apply(&[&v, val]).as_datatype().unwrap();
   }
   
   fn pop(&mut self) -> Dynamic<'ctx> {
-    let len = self.symlen();
-    let updated_len = len.bvsub(&BV::from_u64(self.z3_ctx, 1, 64)).simplify();
-    self.set_symlen(&updated_len);
-    let v = self.array();
-    v.select(&updated_len)
+    let v = Dynamic::from_ast(&self.data);
+    self.data = self.func_decls.pop_vec.apply(&[&v]).as_datatype().unwrap();
+    self.func_decls.pop_res.apply(&[&v])
   }
 
   fn swap(&mut self, idx1: &SymU64<'ctx>, idx2: &SymU64<'ctx>) {
@@ -662,7 +631,8 @@ impl<'ctx> SymVectorImpl<'ctx> {
     let idx2 = idx2.as_inner();
     let ast1 = self.get_raw(idx1);
     let ast2 = self.get_raw(idx2);
-    self.set_multiple_raw(&[(idx2, &ast1), (idx1, &ast2)]);
+    self.set_raw(&idx1, &ast2);
+    self.set_raw(&idx2, &ast1);
   }
 }
 
@@ -789,6 +759,7 @@ impl<'ctx> SymVectorImpl<'ctx> {
       z3_ctx: self.z3_ctx,
       element_type: self.element_type.clone(),
       datatype: Rc::clone(&self.datatype),
+      func_decls: Rc::clone(&self.func_decls),
       data: self.data.clone(),
     }
   }
@@ -1260,7 +1231,7 @@ impl<'ctx> SymContainerRef<'ctx> {
       Symbolic(_) => {},
     }
 
-    // TODO: Currently except locals all ref is in indexed ref, it seems ok to me but nee further consideration.
+    // TODO: Currently except locals all ref is in indexed ref, it seems ok to me but need further consideration.
     let res = match self.container() {
       SymContainer::Locals(r) => match get_local_by_idx!(r.borrow(), idx) {
         // TODO: check for the impossible combinations.
@@ -2240,7 +2211,7 @@ impl<'ctx> SymVectorRef<'ctx> {
       | VecU128(r)
       | VecBool(r)
       | VecAddress(r)
-      | Vec(r) => r.borrow().symlen(),
+      | Vec(r) => r.borrow().len(),
 
       Locals(_) | Struct(_) => unreachable!(),
     };
