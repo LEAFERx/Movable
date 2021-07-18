@@ -25,13 +25,13 @@ use z3::{
 };
 
 #[derive(Debug)]
-pub struct VectorFunctionDecls<'ctx> {
+pub struct ValueListFunctionDecls<'ctx> {
   pub empty: Rc<RecFuncDecl<'ctx>>,
   pub len: Rc<RecFuncDecl<'ctx>>,
   pub select: Rc<RecFuncDecl<'ctx>>,
   pub store: Rc<RecFuncDecl<'ctx>>,
   pub push: Rc<RecFuncDecl<'ctx>>,
-  pub pop_vec: Rc<RecFuncDecl<'ctx>>,
+  pub pop_vl: Rc<RecFuncDecl<'ctx>>,
   pub pop_res: Rc<RecFuncDecl<'ctx>>,
 }
 
@@ -48,14 +48,15 @@ pub struct TypeContext<'ctx> {
 
   value_sort: Rc<DatatypeSort<'ctx>>,
   value_list_sort: Rc<DatatypeSort<'ctx>>,
+  value_list_function_decls: Rc<ValueListFunctionDecls<'ctx>>,
   global_value_sort: Rc<DatatypeSort<'ctx>>,
 
   memory_key_sort: Rc<DatatypeSort<'ctx>>,
   memory_sort: Rc<Sort<'ctx>>,
 
-  struct_cache: RefCell<HashMap<StructTag, Rc<DatatypeSort<'ctx>>>>,
-  vec_cache: RefCell<HashMap<TypeTag, Rc<DatatypeSort<'ctx>>>>,
-  vec_func_cache: RefCell<HashMap<TypeTag, Rc<VectorFunctionDecls<'ctx>>>>,
+  // struct_cache: RefCell<HashMap<StructTag, Rc<DatatypeSort<'ctx>>>>,
+  // vec_cache: RefCell<HashMap<TypeTag, Rc<DatatypeSort<'ctx>>>>,
+  // vec_func_cache: RefCell<HashMap<TypeTag, Rc<VectorFunctionDecls<'ctx>>>>,
   type_cache: RefCell<HashMap<TypeTag, Rc<Sort<'ctx>>>>,
 }
 
@@ -69,9 +70,10 @@ impl<'ctx> TypeContext<'ctx> {
     let mut value_sorts = value_datatype_sorts(z3_ctx);
     let value_sort = value_sorts.remove(0);
     let value_list_sort = value_sorts.remove(0);
-    let global_value_sort = global_value_datatype_sort(z3_ctx, &value_sort.sort);
+    let value_list_function_decls = value_list_function_decls(z3_ctx, &value_list_sort, &value_sort.sort);
+    let global_value_sort = global_value_datatype_sort(z3_ctx, &value_list_sort.sort);
 
-    let memory_key_sort = memory_key_datatype_sort(z3_ctx, &struct_tag_sort.sort);
+    let memory_key_sort = memory_key_datatype_sort(z3_ctx, &type_tag_sort.sort);
     let memory_sort = memory_sort(z3_ctx, &memory_key_sort.sort, &global_value_sort.sort);
 
     Self {
@@ -85,16 +87,22 @@ impl<'ctx> TypeContext<'ctx> {
       
       value_sort: Rc::new(value_sort),
       value_list_sort: Rc::new(value_list_sort),
+      value_list_function_decls: Rc::new(value_list_function_decls),
+
       global_value_sort: Rc::new(global_value_sort),
 
       memory_key_sort: Rc::new(memory_key_sort),
       memory_sort: Rc::new(memory_sort),
 
-      struct_cache: RefCell::new(HashMap::new()),
-      vec_cache: RefCell::new(HashMap::new()),
-      vec_func_cache: RefCell::new(HashMap::new()),
+      // struct_cache: RefCell::new(HashMap::new()),
+      // vec_cache: RefCell::new(HashMap::new()),
+      // vec_func_cache: RefCell::new(HashMap::new()),
       type_cache: RefCell::new(HashMap::new()),
     }
+  }
+
+  pub fn z3_ctx(&self) -> &'ctx Z3Context {
+    self.z3_ctx
   }
 
   pub fn signer_tag(&self) -> &StructTag {
@@ -125,6 +133,10 @@ impl<'ctx> TypeContext<'ctx> {
     Rc::clone(&self.value_list_sort)
   }
 
+  pub fn value_list_function_decls(&self) -> Rc<ValueListFunctionDecls<'ctx>> {
+    Rc::clone(&self.value_list_function_decls)
+  }
+
   pub fn global_value_sort(&self) -> Rc<DatatypeSort<'ctx>> {
     Rc::clone(&self.global_value_sort)
   }
@@ -137,36 +149,72 @@ impl<'ctx> TypeContext<'ctx> {
     Rc::clone(&self.memory_sort)
   }
 
-  pub fn struct_tag_to_datatype_sort(&self, ty: StructTag) -> Rc<DatatypeSort<'ctx>> {
-    match self.struct_cache.borrow_mut().entry(ty) {
-      Entry::Occupied(e) => Rc::clone(e.get()),
-      Entry::Vacant(e) => Rc::clone({
-        let s = Rc::new(struct_tag_to_datatype_sort(self.z3_ctx, e.key()));
-        e.insert(s)
-      })
+  // pub fn struct_tag_to_datatype_sort(&self, ty: StructTag) -> Rc<DatatypeSort<'ctx>> {
+  //   match self.struct_cache.borrow_mut().entry(ty) {
+  //     Entry::Occupied(e) => Rc::clone(e.get()),
+  //     Entry::Vacant(e) => Rc::clone({
+  //       let s = Rc::new(struct_tag_to_datatype_sort(self.z3_ctx, e.key()));
+  //       e.insert(s)
+  //     })
+  //   }
+  // }
+
+  // pub fn vec_to_datatype_sort(&self, ty: TypeTag) -> Rc<DatatypeSort<'ctx>> {
+  //   match self.vec_cache.borrow_mut().entry(ty) {
+  //     Entry::Occupied(e) => Rc::clone(e.get()),
+  //     Entry::Vacant(e) => Rc::clone({
+  //       let s = Rc::new(vec_to_datatype_sort(self.z3_ctx, e.key()));
+  //       e.insert(s)
+  //     })
+  //   }
+  // }
+
+  // pub fn vec_func_decls(&self, ty: TypeTag) -> Rc<VectorFunctionDecls<'ctx>> {
+  //   let vsort = self.vec_to_datatype_sort(ty.clone());
+  //   match self.vec_func_cache.borrow_mut().entry(ty) {
+  //     Entry::Occupied(e) => Rc::clone(e.get()),
+  //     Entry::Vacant(e) => Rc::clone({
+  //       let s = Rc::new(vector_function_decls(
+  //         self.z3_ctx, &type_tag_to_sort(self.z3_ctx, e.key()), &vsort));
+  //       e.insert(s)
+  //     })
+  //   }
+  // }
+
+  pub fn value_ast_to_runtime_ast(&self, ast: Dynamic<'ctx>, ty: &TypeTag) -> Dynamic<'ctx> {
+    match ty {
+      TypeTag::Bool => self.value_sort.variants[0].accessors[0].apply(&[&ast]),
+      TypeTag::U8 => self.value_sort.variants[1].accessors[0].apply(&[&ast]),
+      TypeTag::U64 => self.value_sort.variants[2].accessors[0].apply(&[&ast]),
+      TypeTag::U128 => self.value_sort.variants[3].accessors[0].apply(&[&ast]),
+      TypeTag::Address => self.value_sort.variants[4].accessors[0].apply(&[&ast]),
+      // This returns a ValueList!
+      TypeTag::Signer
+      | TypeTag::Vector(_)
+      | TypeTag::Struct(_) => self.value_sort.variants[5].accessors[0].apply(&[&ast]),
     }
   }
 
-  pub fn vec_to_datatype_sort(&self, ty: TypeTag) -> Rc<DatatypeSort<'ctx>> {
-    match self.vec_cache.borrow_mut().entry(ty) {
-      Entry::Occupied(e) => Rc::clone(e.get()),
-      Entry::Vacant(e) => Rc::clone({
-        let s = Rc::new(vec_to_datatype_sort(self.z3_ctx, e.key()));
-        e.insert(s)
-      })
+  pub fn runtime_ast_to_value_ast(&self, ast: Dynamic<'ctx>, ty: &TypeTag) -> Dynamic<'ctx> {
+    match ty {
+      TypeTag::Bool => self.value_sort.variants[0].constructor.apply(&[&ast]),
+      TypeTag::U8 => self.value_sort.variants[1].constructor.apply(&[&ast]),
+      TypeTag::U64 => self.value_sort.variants[2].constructor.apply(&[&ast]),
+      TypeTag::U128 => self.value_sort.variants[3].constructor.apply(&[&ast]),
+      TypeTag::Address => self.value_sort.variants[4].constructor.apply(&[&ast]),
+      // `ast` should be a ValueList!
+      TypeTag::Signer
+      | TypeTag::Vector(_)
+      | TypeTag::Struct(_) => self.value_sort.variants[5].constructor.apply(&[&ast]),
     }
   }
 
-  pub fn vec_func_decls(&self, ty: TypeTag) -> Rc<VectorFunctionDecls<'ctx>> {
-    let vsort = self.vec_to_datatype_sort(ty.clone());
-    match self.vec_func_cache.borrow_mut().entry(ty) {
-      Entry::Occupied(e) => Rc::clone(e.get()),
-      Entry::Vacant(e) => Rc::clone({
-        let s = Rc::new(vector_function_decls(
-          self.z3_ctx, &type_tag_to_sort(self.z3_ctx, e.key()), &vsort));
-        e.insert(s)
-      })
-    }
+  pub fn fresh_value_const(&self, ty: &TypeTag, prefix: &str) -> Dynamic<'ctx> {
+    fresh_value_const(self.z3_ctx, self, ty, prefix)
+  }
+
+  pub fn fresh_value_list_const(&self, ty: &TypeTag, prefix: &str) -> Option<Dynamic<'ctx>> {
+    fresh_value_list_const(self.z3_ctx, self, ty, prefix)
   }
 
   pub fn type_tag_to_sort(&self, ty: TypeTag) -> Rc<Sort<'ctx>> {
@@ -252,9 +300,8 @@ fn value_datatype_sorts<'ctx>(z3_ctx: &'ctx Z3Context) -> Vec<DatatypeSort<'ctx>
     .variant("U64", vec![("val", DatatypeAccessor::Sort(u64_))])
     .variant("U128", vec![("val", DatatypeAccessor::Sort(u128_.clone()))])
     .variant("Address", vec![("val", DatatypeAccessor::Sort(u128_))])
-    .variant("Vector", vec![
+    .variant("ValueList", vec![
       ("val", DatatypeAccessor::Datatype("ValueList".into())),
-      ("len", DatatypeAccessor::Sort(int)),
     ]);
   let vl = DatatypeBuilder::new(z3_ctx, "ValueList")
     .variant("nil", vec![])
@@ -265,21 +312,21 @@ fn value_datatype_sorts<'ctx>(z3_ctx: &'ctx Z3Context) -> Vec<DatatypeSort<'ctx>
   create_datatypes(vec![v, vl])
 }
 
-fn global_value_datatype_sort<'ctx>(z3_ctx: &'ctx Z3Context, value_sort: &Sort<'ctx>) -> DatatypeSort<'ctx> {
+fn global_value_datatype_sort<'ctx>(z3_ctx: &'ctx Z3Context, value_list_sort: &Sort<'ctx>) -> DatatypeSort<'ctx> {
   DatatypeBuilder::new(z3_ctx, "SymGlobalValue")
     .variant("None", vec![])
-    .variant("Fresh", vec![("value", DatatypeAccessor::Sort(value_sort.clone()))])
-    .variant("CachedClean", vec![("value", DatatypeAccessor::Sort(value_sort.clone()))])
-    .variant("CachedDirty", vec![("value", DatatypeAccessor::Sort(value_sort.clone()))])
+    .variant("Fresh", vec![("value", DatatypeAccessor::Sort(value_list_sort.clone()))])
+    .variant("CachedClean", vec![("value", DatatypeAccessor::Sort(value_list_sort.clone()))])
+    .variant("CachedDirty", vec![("value", DatatypeAccessor::Sort(value_list_sort.clone()))])
     .variant("Deleted", vec![])
     .finish()
 }
 
-fn memory_key_datatype_sort<'ctx>(z3_ctx: &'ctx Z3Context, stag_sort: &Sort<'ctx>) -> DatatypeSort<'ctx> {
+fn memory_key_datatype_sort<'ctx>(z3_ctx: &'ctx Z3Context, ty_sort: &Sort<'ctx>) -> DatatypeSort<'ctx> {
   DatatypeBuilder::new(z3_ctx, "SymMemoryKey")
     .variant("SymMemoryKey", vec![
       ("Address", DatatypeAccessor::Sort(Sort::bitvector(z3_ctx, 128))),
-      ("Type", DatatypeAccessor::Sort(stag_sort.clone())),
+      ("Type", DatatypeAccessor::Sort(ty_sort.clone())),
     ])
     .finish()
 }
@@ -361,82 +408,142 @@ fn sort_to_new_const<'ctx>(z3_ctx: &'ctx Z3Context, sort: &Sort<'ctx>, name: &st
   }
 }
 
-fn vector_function_decls<'ctx>(z3_ctx: &'ctx Z3Context, tsort: &Sort<'ctx>, vsort: &DatatypeSort<'ctx>) -> VectorFunctionDecls<'ctx> {
+fn value_list_function_decls<'ctx>(z3_ctx: &'ctx Z3Context, vlsort: &DatatypeSort<'ctx>, vsort: &Sort<'ctx>) -> ValueListFunctionDecls<'ctx> {
   let zero = Dynamic::from_ast(&BV::from_u64(z3_ctx, 0, 64));
-  let nil = vsort.variants[0].constructor.apply(&[]);
-  let v = Datatype::new_const(z3_ctx, "VectorArg", &vsort.sort).into();
+  let nil = vlsort.variants[0].constructor.apply(&[]);
+  let v = Datatype::new_const(z3_ctx, "ValueListArg", &vlsort.sort).into();
   let idx = BV::new_const(z3_ctx, "IndexArg", 64).into();
-  let elem = sort_to_new_const(z3_ctx, tsort, "ElementArg");
+  let elem = sort_to_new_const(z3_ctx, vsort, "ValueArg");
 
-  let empty = RecFuncDecl::new(z3_ctx, "VecEmpty", &[&vsort.sort], &Sort::bool(z3_ctx));
+  let empty = RecFuncDecl::new(z3_ctx, "ValueListEmpty", &[&vlsort.sort], &Sort::bool(z3_ctx));
   empty.add_def(&[&v], &v._eq(&nil));
   
-  let len = RecFuncDecl::new(z3_ctx, "VecLen", &[&vsort.sort], &Sort::bitvector(z3_ctx, 64));
+  let len = RecFuncDecl::new(z3_ctx, "ValueListLen", &[&vlsort.sort], &Sort::bitvector(z3_ctx, 64));
   len.add_def(&[&v], &v._eq(&nil).ite(
     &zero,
-    &Dynamic::from(len.apply(&[&vsort.variants[1].accessors[1].apply(&[&v])]).as_bv().unwrap() + 1u64),
+    &Dynamic::from(len.apply(&[&vlsort.variants[1].accessors[1].apply(&[&v])]).as_bv().unwrap() + 1u64),
   ));
   
-  let select = RecFuncDecl::new(z3_ctx, "VecSelect", &[&vsort.sort, &Sort::bitvector(z3_ctx, 64)], tsort);
+  let select = RecFuncDecl::new(z3_ctx, "ValueListSelect", &[&vlsort.sort, &Sort::bitvector(z3_ctx, 64)], vsort);
   select.add_def(&[&v, &idx], &idx._eq(&zero).ite(
-    &vsort.variants[1].accessors[0].apply(&[&v]),
+    &vlsort.variants[1].accessors[0].apply(&[&v]),
     &select.apply(&[
-      &vsort.variants[1].accessors[1].apply(&[&v]),
+      &vlsort.variants[1].accessors[1].apply(&[&v]),
       &Dynamic::from(idx.as_bv().unwrap() - 1u64)
     ]),
   ));
   
-  let store = RecFuncDecl::new(z3_ctx, "VecStore", &[&vsort.sort, &Sort::bitvector(z3_ctx, 64), &tsort], &vsort.sort);
+  let store = RecFuncDecl::new(z3_ctx, "ValueListStore", &[&vlsort.sort, &Sort::bitvector(z3_ctx, 64), &vsort], &vlsort.sort);
   store.add_def(&[&v, &idx, &elem], &idx._eq(&zero).ite(
-    &vsort.variants[1].constructor.apply(&[&elem, &v]),
-    &vsort.variants[1].constructor.apply(&[
-      &vsort.variants[1].accessors[0].apply(&[&v]),
+    &vlsort.variants[1].constructor.apply(&[&elem, &v]),
+    &vlsort.variants[1].constructor.apply(&[
+      &vlsort.variants[1].accessors[0].apply(&[&v]),
       &store.apply(&[
-        &vsort.variants[1].accessors[1].apply(&[&v]),
+        &vlsort.variants[1].accessors[1].apply(&[&v]),
         &Dynamic::from(idx.as_bv().unwrap() - 1u64),
         &elem,
       ]),
     ]),
   ));
   
-  let push = RecFuncDecl::new(z3_ctx, "VecPush", &[&vsort.sort, tsort], &vsort.sort);
+  let push = RecFuncDecl::new(z3_ctx, "ValueListPush", &[&vlsort.sort, vsort], &vlsort.sort);
   push.add_def(&[&v, &elem], &v._eq(&nil).ite(
-    &vsort.variants[1].constructor.apply(&[&elem, &nil]),
-    &vsort.variants[1].constructor.apply(&[
-      &vsort.variants[1].accessors[0].apply(&[&v]),
+    &vlsort.variants[1].constructor.apply(&[&elem, &nil]),
+    &vlsort.variants[1].constructor.apply(&[
+      &vlsort.variants[1].accessors[0].apply(&[&v]),
       &push.apply(&[
-        &vsort.variants[1].accessors[1].apply(&[&v]),
+        &vlsort.variants[1].accessors[1].apply(&[&v]),
         &elem,
       ]),
     ]),
   ));
   
-  let pop_vec = RecFuncDecl::new(z3_ctx, "VecPopVec", &[&vsort.sort], &vsort.sort);
-  pop_vec.add_def(&[&v], &nil._eq(
-    &vsort.variants[1].accessors[1].apply(&[&v]),
+  let pop_vl = RecFuncDecl::new(z3_ctx, "ValueListPop[ValueList]", &[&vlsort.sort], &vlsort.sort);
+  pop_vl.add_def(&[&v], &nil._eq(
+    &vlsort.variants[1].accessors[1].apply(&[&v]),
   ).ite(
     &nil,
-    &vsort.variants[1].constructor.apply(&[
-      &vsort.variants[1].accessors[0].apply(&[&v]),
-      &pop_vec.apply(&[&vsort.variants[1].accessors[1].apply(&[&v])]),
+    &vlsort.variants[1].constructor.apply(&[
+      &vlsort.variants[1].accessors[0].apply(&[&v]),
+      &pop_vl.apply(&[&vlsort.variants[1].accessors[1].apply(&[&v])]),
     ]),
   ));
   
-  let pop_res = RecFuncDecl::new(z3_ctx, "VecPopRes", &[&vsort.sort], &tsort);
+  let pop_res = RecFuncDecl::new(z3_ctx, "ValueListPop[ValueResult]", &[&vlsort.sort], &vsort);
   pop_res.add_def(&[&v], &nil._eq(
-    &vsort.variants[1].accessors[1].apply(&[&v]),
+    &vlsort.variants[1].accessors[1].apply(&[&v]),
   ).ite(
-    &vsort.variants[1].accessors[0].apply(&[&v]),
-    &pop_res.apply(&[&vsort.variants[1].accessors[1].apply(&[&v])]),
+    &vlsort.variants[1].accessors[0].apply(&[&v]),
+    &pop_res.apply(&[&vlsort.variants[1].accessors[1].apply(&[&v])]),
   ));
 
-  VectorFunctionDecls {
+  ValueListFunctionDecls {
     empty: Rc::new(empty),
     len: Rc::new(len),
     select: Rc::new(select),
     store: Rc::new(store),
     push: Rc::new(push),
-    pop_vec: Rc::new(pop_vec),
+    pop_vl: Rc::new(pop_vl),
     pop_res: Rc::new(pop_res),
   }
+}
+
+fn fresh_value_const<'ctx>(
+  z3_ctx: &'ctx Z3Context,
+  ty_ctx: &TypeContext<'ctx>,
+  ty: &TypeTag,
+  prefix: &str,
+) -> Dynamic<'ctx> {
+  let vsort = ty_ctx.value_sort();
+  let vlsort = ty_ctx.value_list_sort();
+
+  match ty {
+    TypeTag::Bool => vsort.variants[0].constructor.apply(&[&Bool::fresh_const(z3_ctx, prefix)]),
+    TypeTag::U8 => vsort.variants[1].constructor.apply(&[&BV::fresh_const(z3_ctx, prefix, 8)]),
+    TypeTag::U64 => vsort.variants[2].constructor.apply(&[&BV::fresh_const(z3_ctx, prefix, 64)]),
+    TypeTag::U128 => vsort.variants[3].constructor.apply(&[&BV::fresh_const(z3_ctx, prefix, 128)]),
+    TypeTag::Address => vsort.variants[4].constructor.apply(&[&BV::fresh_const(z3_ctx, prefix, 128)]),
+    TypeTag::Signer
+    | TypeTag::Vector(_)
+    | TypeTag::Struct(_) => vsort.variants[5].constructor.apply(&[
+      &fresh_value_list_const(z3_ctx, ty_ctx, ty, prefix).unwrap(),
+    ]),
+  }
+}
+
+fn fresh_value_list_const<'ctx>(
+  z3_ctx: &'ctx Z3Context,
+  ty_ctx: &TypeContext<'ctx>,
+  ty: &TypeTag,
+  prefix: &str,
+) -> Option<Dynamic<'ctx>> {
+  let vsort = ty_ctx.value_sort();
+  let vlsort = ty_ctx.value_list_sort();
+
+  Some(match ty {
+    TypeTag::Signer => vlsort.variants[1].constructor.apply(&[
+      // Address
+      &vsort.variants[4].constructor.apply(&[&BV::fresh_const(z3_ctx, prefix, 128)]),
+      // Nil
+      &vlsort.variants[0].constructor.apply(&[]),
+    ]),
+    TypeTag::Vector(ty) => {
+      // TODO: There is no good way to constraint all value in value list to be the same type with dynamic list size
+      // TODO: Maybe add constraints to solver?
+      Datatype::fresh_const(z3_ctx, prefix, &vlsort.sort).into()
+    },
+    TypeTag::Struct(stag) => {
+      let mut data = vlsort.variants[0].constructor.apply(&[]); // ValueListNil
+      let mut i = stag.type_params.len();
+      for ty in stag.type_params.iter().rev() {
+        data = vlsort.variants[1].constructor.apply(&[
+          &fresh_value_const(z3_ctx, ty_ctx, ty, &format!("{}.{}", prefix, i)),
+          &data,
+        ]);
+        i = i - 1;
+      }
+      data
+    },
+    _ => return None,
+  })
 }

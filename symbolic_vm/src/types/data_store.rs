@@ -1,9 +1,9 @@
 use move_vm_types::loaded_data::runtime_types::Type;
-use move_core_types::{account_address::AccountAddress, language_storage::ModuleId};
+use move_core_types::{account_address::AccountAddress, language_storage::{ModuleId, StructTag}};
 use vm::errors::{PartialVMResult, VMResult};
 use crate::{
   runtime::context::TypeContext,
-  types::values::{SymGlobalValue, SymValue},
+  types::values::{SymAccountAddress, SymGlobalValue, SymValue},
 };
 use z3::Context;
 
@@ -25,9 +25,14 @@ pub trait SymDataStore<'ctx> {
   /// that is owned by the data store.
   fn load_resource(
     &mut self,
-    addr: AccountAddress,
+    addr: SymAccountAddress<'ctx>,
     ty: &Type,
-  ) -> PartialVMResult<&mut SymGlobalValue<'ctx>>;
+  ) -> PartialVMResult<SymGlobalValue<'ctx>>;
+
+  fn write_resource(
+    &mut self,
+    val: &SymGlobalValue<'ctx>,
+  ) -> PartialVMResult<()>;
 
   /// Get the serialized format of a `CompiledModule` given a `ModuleId`.
   fn load_module(&self, module_id: &ModuleId) -> VMResult<Vec<u8>>;

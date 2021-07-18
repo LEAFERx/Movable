@@ -53,13 +53,17 @@ impl<'ctx> SymAccountAddress<'ctx> {
     }
   }
 
+  pub fn as_inner(&self) -> &BV<'ctx> {
+    &self.ast
+  }
+
   pub fn equals(&self, other: &Self) -> SymBool<'ctx> {
     SymBool::from_ast(self.ast._eq(&other.ast))
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymAccountAddress<'ctx> {
-  fn as_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.ast))
   }
 }

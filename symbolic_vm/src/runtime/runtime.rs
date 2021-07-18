@@ -192,7 +192,7 @@ impl<'ctx> VMRuntime<'ctx> {
       data_cache,
     )?;
 
-    let args: PartialVMResult<Vec<_>> = args.into_iter().map(|v| v.as_ast()).collect();
+    let args: PartialVMResult<Vec<_>> = args.into_iter().map(|v| v.as_runtime_ast()).collect();
     let args = args.map_err(|e| e.finish(Location::Undefined))?;
 
     let mut interp_stack = vec![];
@@ -216,7 +216,7 @@ impl<'ctx> VMRuntime<'ctx> {
                 }
                 println!("Returns:");
                 for (idx, val) in return_values.into_iter().enumerate() {
-                  let ast = val.as_ast().map_err(|e| e.finish(Location::Undefined))?;
+                  let ast = val.as_runtime_ast().map_err(|e| e.finish(Location::Undefined))?;
                   println!("Index {}: {:#?}", idx, model.eval(&ast, true));
                 }
                 println!("-------REPORT END---------");

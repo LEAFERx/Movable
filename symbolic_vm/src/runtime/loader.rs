@@ -1784,16 +1784,21 @@ impl Loader {
       }
     }
 
-    let ty_arg_tags = ty_args
-      .iter()
-      .map(|ty| self.type_to_type_tag(ty))
-      .collect::<PartialVMResult<Vec<_>>>()?;
     let struct_type = self.module_cache.lock().struct_at(gidx);
+    let field_tys = struct_type
+      .fields
+      .iter()
+      .map(|ty| ty.subst(ty_args))
+      .collect::<PartialVMResult<Vec<_>>>()?;
+    let field_tags = field_tys
+      .iter()
+      .map(|ty| self.type_to_type_tag_impl(ty))
+      .collect::<PartialVMResult<Vec<_>>>()?;
     let struct_tag = StructTag {
       address: *struct_type.module.address(),
       module: struct_type.module.name().to_owned(),
       name: struct_type.name.clone(),
-      type_params: ty_arg_tags,
+      type_params: field_tags,
     };
 
     self
@@ -1902,6 +1907,7 @@ impl Loader {
   pub(crate) fn type_to_type_tag(&self, ty: &Type) -> PartialVMResult<TypeTag> {
     self.type_to_type_tag_impl(ty)
   }
+
   pub(crate) fn type_to_type_layout(&self, ty: &Type) -> PartialVMResult<MoveTypeLayout> {
     self.type_to_type_layout_impl(ty, 1)
   }

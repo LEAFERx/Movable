@@ -168,7 +168,7 @@ impl<'a> Plugin for VerificationPlugin<'a> {
       solver.assert(&projected.not());
       match solver.check() {
         SatResult::Sat => {
-          let inputs = HashSet::from_iter(spec_inputs.iter().map(|v| v.as_ast().unwrap()));
+          let inputs = HashSet::from_iter(spec_inputs.iter().map(|v| v.as_runtime_ast().unwrap()));
           let projected_input = project(z3_ctx, &pc, &inputs).expect("Quantifier Elimination Failed!");
           let suggested = Bool::and(z3_ctx, &[
             &projected_input.implies(&Bool::and(z3_ctx, &[&projected.not(), phi]).simplify()),

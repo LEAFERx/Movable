@@ -4,11 +4,15 @@ use move_core_types::{
   value::{MoveStructLayout, MoveTypeLayout},
 };
 use diem_types::account_address::AccountAddress;
+use vm::errors::*;
 
 use crate::{
   runtime::context::TypeContext,
   types::{
     values::{
+      SymbolicMoveValue,
+      SymAccountAddress,
+      SymValue,
       SymGlobalValue,
       types::{SymStructTag, SymTypeTag},
     },
@@ -16,9 +20,11 @@ use crate::{
 };
 
 use z3::{
-  ast::{Array, BV, Datatype, Dynamic},
+  ast::{Ast, Array, BV, Datatype, Dynamic},
   Context,
   DatatypeSort,
+  RecFuncDecl,
+  Sort,
 };
 
 pub struct SymMemory<'ctx> {
@@ -48,31 +54,42 @@ impl<'ctx> SymMemory<'ctx> {
     &self,
     z3_ctx: &'ctx Context,
     ty_ctx: &TypeContext<'ctx>, 
-    addr: AccountAddress,
-    ty: &StructTag,
-  ) -> PartialVMResult<&mut SymGlobalValue<'ctx>> {
-    // 1. build SymStructTag
-    let tag = SymStructTag::from_struct_tag(z3_ctx, ty_ctx, ty).to_ast().into();
+    addr: SymAccountAddress<'ctx>,
+    ty: TypeTag,
+  ) -> PartialVMResult<SymGlobalValue<'ctx>> {
+    // 1. build SymTypeTag
+    let tag = SymTypeTag::from_type_tag(z3_ctx, ty_ctx, &ty).to_ast();
     // 2. build SymMemoryKey
     let ksort = ty_ctx.memory_key_sort();
-    let addr_ast = address_to_ast(z3_ctx, addr).into();
+    let addr_ast = addr.as_inner();
     let key = ksort.variants[0].constructor.apply(&[
-      &addr_ast,
+      addr_ast,
       &tag,
     ]).as_datatype().unwrap();
     // 3. get_raw -> Datatype
     let val = self.get_raw(&key);
     // 4. Datatype to SymGlobleValue
-    let val = ast_to_global_value(val);
-    // 5. handle the write back stuff !review this!
-    val
+    global_value_ast_to_global_value(ty_ctx, val, addr, ty)
   }
-}
 
-fn address_to_ast<'ctx>(z3_ctx: &'ctx Context, address: AccountAddress) -> BV<'ctx> {
-  let value = u128::from_ne_bytes(address.into());
-  BV::from_u64(z3_ctx, (value >> 64) as u64, 64)
-    .concat(&BV::from_u64(z3_ctx, value as u64, 64))
+  pub fn write_resource(
+    &mut self,
+    z3_ctx: &'ctx Context,
+    ty_ctx: &TypeContext<'ctx>,
+    val: &SymGlobalValue<'ctx>,
+  ) -> PartialVMResult<()> {
+    let ty = val.ty();
+    let tag_ast = SymTypeTag::from_type_tag(z3_ctx, ty_ctx, ty).to_ast();
+    let ksort = ty_ctx.memory_key_sort();
+    let addr_ast = val.address().as_inner();
+    let key = ksort.variants[0].constructor.apply(&[
+      addr_ast,
+      &tag_ast,
+    ]).as_datatype().unwrap();
+    let val = val.as_global_ast(ty_ctx, ty);
+    self.set_raw(&key, val);
+    Ok(())
+  }
 }
 
 // TODO: Consider to fork instead of presuppose concrete status
@@ -81,6 +98,33 @@ fn test_global_value_variant<'ctx>(sort: &DatatypeSort<'ctx>, ast: &Datatype<'ct
     .expect("Global value status should always be concrete")
 }
 
-fn ast_to_global_value<'ctx>(ast: Datatype<'ctx>) -> SymGlobalValue<'ctx> {
-  // 
+fn global_value_ast_to_global_value<'ctx>(
+  ty_ctx: &TypeContext<'ctx>,
+  ast: Datatype<'ctx>,
+  addr: SymAccountAddress<'ctx>,
+  ty: TypeTag,
+) -> PartialVMResult<SymGlobalValue<'ctx>> {
+  let sort = &ty_ctx.global_value_sort();
+  if test_global_value_variant(sort, &ast, 0) {
+    return Ok(SymGlobalValue::none(addr, ty));
+  }
+  if test_global_value_variant(sort, &ast, 1) {
+    let ast = sort.variants[1].accessors[0].apply(&[&ast]);
+    let val = SymValue::from_value_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
+    return SymGlobalValue::fresh(addr, ty, val);
+  }
+  if test_global_value_variant(sort, &ast, 2) {
+    let ast = sort.variants[2].accessors[0].apply(&[&ast]);
+    let val = SymValue::from_value_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
+    return SymGlobalValue::cached(addr, ty, val);
+  }
+  if test_global_value_variant(sort, &ast, 3) {
+    let ast = sort.variants[3].accessors[0].apply(&[&ast]);
+    let val = SymValue::from_value_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
+    return SymGlobalValue::cached_dirty(addr, ty, val);
+  }
+  if test_global_value_variant(sort, &ast, 4) {
+    return Ok(SymGlobalValue::deleted(addr, ty));
+  }
+  unreachable!()
 }

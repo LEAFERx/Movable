@@ -430,9 +430,9 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   /// Load a resource from the data store.
   fn load_resource(
     &mut self,
-    addr: AccountAddress,
+    addr: SymAccountAddress<'ctx>,
     ty: &Type,
-  ) -> PartialVMResult<&mut SymGlobalValue<'ctx>> {
+  ) -> PartialVMResult<SymGlobalValue<'ctx>> {
     match self.data_cache.load_resource(addr, ty) {
       Ok(gv) => Ok(gv),
       Err(e) => {
@@ -449,7 +449,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   /// BorrowGlobal (mutable and not) opcode.
   fn borrow_global(
     &mut self,
-    addr: AccountAddress,
+    addr: SymAccountAddress<'ctx>,
     ty: &Type,
   ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
     let g = self.load_resource(addr, ty)?.borrow_global()?;
@@ -461,7 +461,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   /// Exists opcode.
   fn exists(
     &mut self,
-    addr: AccountAddress,
+    addr: SymAccountAddress<'ctx>,
     ty: &Type,
   ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
     let gv = self.load_resource(addr, ty)?;
@@ -475,7 +475,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   /// MoveFrom opcode.
   fn move_from(
     &mut self,
-    addr: AccountAddress,
+    addr: SymAccountAddress<'ctx>,
     ty: &Type,
   ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
     let resource = self.load_resource(addr, ty)?.move_from()?;
@@ -487,12 +487,12 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   /// MoveTo opcode.
   fn move_to(
     &mut self,
-    addr: AccountAddress,
+    addr: SymAccountAddress<'ctx>,
     ty: &Type,
     resource: SymValue<'ctx>,
   ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
     let size = resource.size();
-    self.load_resource(addr, ty)?.move_to(resource)?;
+    self.load_resource(addr, ty)?.move_to(&mut self.data_cache, resource)?;
     Ok(size)
   }
 
@@ -995,7 +995,7 @@ impl<'ctx> SymFrame<'ctx> {
             //   Opcodes::WRITE_REF,
             //   value.size()
             // )?;
-            reference.write_ref(value)?;
+            reference.write_ref(interpreter.data_cache_mut(), value)?;
           }
           Bytecode::CastU8 => {
             // gas!(const_instr: context, interpreter, Opcodes::CAST_U8)?;
@@ -1123,7 +1123,7 @@ impl<'ctx> SymFrame<'ctx> {
               .push(SymValue::from_sym_bool(lhs.equals(interpreter.get_ty_ctx(), &rhs)?.not()))?;
           }
           Bytecode::MutBorrowGlobal(sd_idx) | Bytecode::ImmBorrowGlobal(sd_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.get_struct_type(*sd_idx);
             let _size = interpreter.borrow_global(addr, &ty)?;
             // gas!(
@@ -1135,7 +1135,7 @@ impl<'ctx> SymFrame<'ctx> {
           }
           Bytecode::MutBorrowGlobalGeneric(si_idx)
           | Bytecode::ImmBorrowGlobalGeneric(si_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
             let _size = interpreter.borrow_global(addr, &ty)?;
             // gas!(
@@ -1146,19 +1146,19 @@ impl<'ctx> SymFrame<'ctx> {
             // )?;
           }
           Bytecode::Exists(sd_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.get_struct_type(*sd_idx);
             let _size = interpreter.exists(addr, &ty)?;
             // gas!(instr: context, interpreter, Opcodes::EXISTS, size)?;
           }
           Bytecode::ExistsGeneric(si_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
             let _size = interpreter.exists(addr, &ty)?;
             // gas!(instr: context, interpreter, Opcodes::EXISTS_GENERIC, size)?;
           }
           Bytecode::MoveFrom(sd_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.get_struct_type(*sd_idx);
             let _size = interpreter.move_from(addr, &ty)?;
             // TODO: Have this calculate before pulling in the data based upon
@@ -1166,7 +1166,7 @@ impl<'ctx> SymFrame<'ctx> {
             // gas!(instr: context, interpreter, Opcodes::MOVE_FROM, size)?;
           }
           Bytecode::MoveFromGeneric(si_idx) => {
-            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?.into_address()?;
+            let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
             let _size = interpreter.move_from(addr, &ty)?;
             // TODO: Have this calculate before pulling in the data based upon
@@ -1186,8 +1186,7 @@ impl<'ctx> SymFrame<'ctx> {
               .borrow_field(ty_ctx, 0)?
               .value_as::<SymReference>()?
               .read_ref(ty_ctx)?
-              .value_as::<SymAccountAddress>()?
-              .into_address()?;
+              .value_as::<SymAccountAddress>()?;
             let ty = resolver.get_struct_type(*sd_idx);
             let _size = interpreter.move_to(addr, &ty, resource)?;
             // gas!(instr: context, interpreter, Opcodes::MOVE_TO, size)?;
@@ -1200,8 +1199,7 @@ impl<'ctx> SymFrame<'ctx> {
               .borrow_field(ty_ctx, 0)?
               .value_as::<SymReference>()?
               .read_ref(ty_ctx)?
-              .value_as::<SymAccountAddress>()?
-              .into_address()?;
+              .value_as::<SymAccountAddress>()?;
             let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
             let _size = interpreter.move_to(addr, &ty, resource)?;
             // gas!(instr: context, interpreter, Opcodes::MOVE_TO_GENERIC, size)?;
