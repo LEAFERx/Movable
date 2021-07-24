@@ -3,9 +3,12 @@ use move_core_types::{account_address::AccountAddress, language_storage::{Module
 use vm::errors::{PartialVMResult, VMResult};
 use crate::{
   runtime::context::TypeContext,
-  types::values::{SymAccountAddress, SymGlobalValue, SymValue},
+  types::{
+    memory::SymLoadResourceResults,
+    values::{SymAccountAddress, SymGlobalValue, SymValue},
+  },
 };
-use z3::Context;
+use z3::{Context};
 
 /// Provide an implementation for bytecodes related to data with a given data store.
 ///
@@ -27,7 +30,7 @@ pub trait SymDataStore<'ctx> {
     &mut self,
     addr: SymAccountAddress<'ctx>,
     ty: &Type,
-  ) -> PartialVMResult<SymGlobalValue<'ctx>>;
+  ) -> PartialVMResult<SymLoadResourceResults<'ctx>>;
 
   fn write_resource(
     &mut self,

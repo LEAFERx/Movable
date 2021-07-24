@@ -15,7 +15,7 @@ use crate::{
   runtime::{
     data_cache::SymDataCache,
     interpreter::{
-      SymInterpreter, SymInterpreterExecutionResult, ExecutionReport,
+      SymInterpreter, SymInterpreterForkResult, SymInterpreterExecutionResult, ExecutionReport,
     },
     loader::Loader,
   },
@@ -192,7 +192,7 @@ impl<'ctx> VMRuntime<'ctx> {
       data_cache,
     )?;
 
-    let args: PartialVMResult<Vec<_>> = args.into_iter().map(|v| v.as_runtime_ast()).collect();
+    let args: PartialVMResult<Vec<_>> = args.into_iter().map(|v| v.as_runtime_ast(self.ty_ctx())).collect();
     let args = args.map_err(|e| e.finish(Location::Undefined))?;
 
     let mut interp_stack = vec![];
@@ -201,13 +201,21 @@ impl<'ctx> VMRuntime<'ctx> {
       if let Some(interp) = interp_stack.pop() {
         match interp.execute(&self.loader, plugin_manager)? {
           SymInterpreterExecutionResult::Fork(forks) => {
-            for interp in forks {
-              interp_stack.push(interp);
+            for result in forks {
+              match result {
+                SymInterpreterForkResult::Fork(interp) => interp_stack.push(interp),
+                SymInterpreterForkResult::Aborted(err) => {
+                  println!("-------REPORT BEGIN-------");
+                  println!("Function aborted.");
+                  println!("Error: {:?}", err);
+                  println!("-------REPORT END---------");
+                }
+              }
             }
           }
           SymInterpreterExecutionResult::Report(report) => {
             match report {
-              ExecutionReport::Returned(model, return_values) => {
+              ExecutionReport::Returned(model, return_values, memory) => {
                 println!("-------REPORT BEGIN-------");
                 println!("Function returned without abortion.");
                 println!("Args:");
@@ -216,14 +224,16 @@ impl<'ctx> VMRuntime<'ctx> {
                 }
                 println!("Returns:");
                 for (idx, val) in return_values.into_iter().enumerate() {
-                  let ast = val.as_runtime_ast().map_err(|e| e.finish(Location::Undefined))?;
+                  let ast = val.as_runtime_ast(self.ty_ctx()).map_err(|e| e.finish(Location::Undefined))?;
                   println!("Index {}: {:#?}", idx, model.eval(&ast, true));
                 }
+                println!("Memory:");
+                println!("{:?}", memory);
                 println!("-------REPORT END---------");
               },
-              ExecutionReport::Aborted(code) => {
+              ExecutionReport::UserAborted(code) => {
                 println!("-------REPORT BEGIN-------");
-                println!("Function aborted.");
+                println!("Function aborted by user.");
                 println!("Code: {:?}", code);
                 println!("-------REPORT END---------");
               }

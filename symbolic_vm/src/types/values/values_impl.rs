@@ -327,7 +327,7 @@ impl<'ctx> SymContainer<'ctx> {
 
   // TODO: Figure out the signer struct symbolization
   fn signer(ty_ctx: &TypeContext<'ctx>, x: SymAccountAddress<'ctx>) -> Self {
-    let ast = x.as_runtime_ast().unwrap();
+    let ast = x.as_runtime_ast(ty_ctx).unwrap();
     let z3_ctx = ast.get_ctx();
     let inner = SymStructImpl::signer(z3_ctx, ty_ctx, &ast);
     SymContainer::Struct(Rc::new(RefCell::new(inner)))
@@ -373,7 +373,7 @@ impl<'ctx> SymStructImpl<'ctx> {
   fn new(
     z3_ctx: &'ctx Context,
     ty_ctx: &TypeContext<'ctx>, 
-    struct_type: StructTag,
+    struct_type: TypeTag,
     fields: &[&dyn Ast<'ctx>],
   ) -> Self {
     let vlsort = ty_ctx.value_list_sort();
@@ -384,7 +384,7 @@ impl<'ctx> SymStructImpl<'ctx> {
     let data = data.as_datatype().unwrap();
     SymStructImpl {
       z3_ctx,
-      struct_type: TypeTag::Struct(struct_type),
+      struct_type,
       data,
     }
   }
@@ -393,9 +393,8 @@ impl<'ctx> SymStructImpl<'ctx> {
     z3_ctx: &'ctx Context,
     ty_ctx: &TypeContext<'ctx>, 
     prefix: &str,
-    struct_type: StructTag,
+    struct_type: TypeTag,
   ) -> Self {
-    let struct_type = TypeTag::Struct(struct_type);
     let data = ty_ctx.fresh_value_list_const(&struct_type, prefix).unwrap().as_datatype().unwrap();
     Self {
       z3_ctx,
@@ -417,10 +416,10 @@ impl<'ctx> SymStructImpl<'ctx> {
     }
   }
 
-  fn from_ast(z3_ctx: &'ctx Context, struct_type: StructTag, ast: Datatype<'ctx>) -> Self {
+  fn from_ast(z3_ctx: &'ctx Context, struct_type: TypeTag, ast: Datatype<'ctx>) -> Self {
     Self {
       z3_ctx,
-      struct_type: TypeTag::Struct(struct_type),
+      struct_type,
       data: ast,
     }
   }
@@ -471,7 +470,7 @@ impl<'ctx> SymStructImpl<'ctx> {
     )?;
     let ast = self.get_raw(ty_ctx, idx)?;
     let ty = match &self.struct_type {
-      TypeTag::Signer => TypeTag::Signer,
+      TypeTag::Signer => TypeTag::Address,
       TypeTag::Struct(s) => s.type_params[idx].clone(),
       _ => unreachable!(),
     };
@@ -484,7 +483,7 @@ impl<'ctx> SymStructImpl<'ctx> {
         .with_message(format!("Symbolic index {:?} cannot be used on Struct", idx))
     )?;
     let ty = match &self.struct_type {
-      TypeTag::Signer => TypeTag::Signer,
+      TypeTag::Signer => TypeTag::Address,
       TypeTag::Struct(s) => s.type_params[idx].clone(),
       _ => unreachable!(),
     };
@@ -510,7 +509,7 @@ impl<'ctx> SymStructImpl<'ctx> {
     Ok(Self::new(
       z3_ctx,
       ty_ctx,
-      struct_type,
+      TypeTag::Struct(struct_type),
       &field_refs,
     ))
   }
@@ -518,7 +517,7 @@ impl<'ctx> SymStructImpl<'ctx> {
   fn get_internal(&self, ty_ctx: &TypeContext<'ctx>, idx: usize) -> PartialVMResult<SymValue<'ctx>> {
     let ast = self.get_raw(ty_ctx, idx)?;
     let ty = match &self.struct_type {
-      TypeTag::Signer => TypeTag::Signer,
+      TypeTag::Signer => TypeTag::Address,
       TypeTag::Struct(s) => s.type_params[idx].clone(),
       _ => unreachable!(),
     };
@@ -1039,6 +1038,23 @@ impl<'ctx> SymContainerRef<'ctx> {
 }
 
 impl<'ctx> SymIndexedRef<'ctx> {
+  fn get_ref(&self, ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<SymValue<'ctx>> {
+    use SymContainer::*;
+
+    let res = match &*self.container_ref.container() {
+      Locals(r) => SymValue(get_local_by_idx!(r.borrow(), self.idx).copy_value()?),
+      Struct(r) => r.borrow().get(ty_ctx, &self.idx)?,
+      Vec(r)
+      | VecU8(r)
+      | VecU64(r)
+      | VecU128(r)
+      | VecBool(r)
+      | VecAddress(r) => r.borrow().get(ty_ctx, &self.idx)?,
+    };
+
+    Ok(res)
+  }
+
   fn read_ref(self, ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<SymValue<'ctx>> {
     use SymContainer::*;
 
@@ -1425,6 +1441,10 @@ impl<'ctx> SymLocals<'ctx> {
     )))
   }
 
+  pub fn len(&self) -> usize {
+    self.0.borrow().len()
+  }
+
   pub fn fork(&self) -> Self {
     Self(Rc::new(RefCell::new(
       self.0.borrow().iter().map(|val| val.copy_value().unwrap()).collect()
@@ -1573,12 +1593,12 @@ impl<'ctx> SymValue<'ctx> {
         };
         Ok(res)
       },
-      TypeTag::Struct(layout) => {
+      TypeTag::Struct(_) => {
         let ast = ast.as_datatype().ok_or(
           PartialVMError::new(StatusCode::UNKNOWN_RUNTIME_STATUS)
             .with_message(format!("{:?} can not be made into Datatype", ast))
         )?;
-        let s = SymStructImpl::from_ast(z3_ctx, layout.clone(), ast);
+        let s = SymStructImpl::from_ast(z3_ctx, ty.clone(), ast);
         Ok(SymValue::from_sym_struct_impl(s))
       },
       TypeTag::Signer => {
@@ -1650,6 +1670,16 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::Bool(SymBool::new(z3_ctx, prefix)))
   }
 
+  pub fn new_address(z3_ctx: &'ctx Context, prefix: &str) -> Self {
+    SymValue(SymValueImpl::Address(SymAccountAddress::from_ast(BV::fresh_const(z3_ctx, prefix, 128))))
+  }
+
+  pub fn new_signer(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, prefix: &str) -> Self {
+    SymValue(SymValueImpl::Container(SymContainer::Struct(Rc::new(RefCell::new(
+      SymStructImpl::new_ast(z3_ctx, ty_ctx, prefix, TypeTag::Signer),
+    )))))
+  }
+
   pub fn new_vector(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, prefix: &str, vtag: TypeTag) -> Self {
     let v = SymVectorImpl::new_ast(z3_ctx, ty_ctx, prefix, vtag.clone());
     let container = match vtag {
@@ -1663,9 +1693,9 @@ impl<'ctx> SymValue<'ctx> {
     SymValue(SymValueImpl::Container(container))
   }
 
-  pub fn new_struct(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, prefix: &str, stag: StructTag) -> Self {
+  pub fn new_struct(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, prefix: &str, ty: TypeTag) -> Self {
     SymValue(SymValueImpl::Container(SymContainer::Struct(Rc::new(RefCell::new(
-      SymStructImpl::new_ast(z3_ctx, ty_ctx, prefix, stag),
+      SymStructImpl::new_ast(z3_ctx, ty_ctx, prefix, ty),
     )))))
   }
 
@@ -2285,13 +2315,15 @@ impl<'ctx> SymVectorRef<'ctx> {
     let c = self.0.container();
     check_elem_layout(context, type_param, c)?;
 
+    let ty_ctx = context.get_ty_ctx();
+
     match c {
       VecU8(r)
       | VecU64(r)
       | VecU128(r)
       | VecBool(r)
       | VecAddress(r)
-      | Vec(r) => r.borrow_mut().push(context.get_ty_ctx(), e.as_runtime_ast()?),
+      | Vec(r) => r.borrow_mut().push(ty_ctx, e.as_runtime_ast(ty_ctx)?),
 
       Locals(_) | Struct(_) => unreachable!(),
     }
@@ -2773,11 +2805,11 @@ impl<'ctx> SymGlobalValue<'ctx> {
     match &self.value {
       SymGlobalValueImpl::None => sort.variants[0].constructor.apply(&[]),
       SymGlobalValueImpl::Fresh { resource } => {
-        let ast = resource.as_runtime_ast().expect("SymGloablValue should always hold an AST!");
+        let ast = resource.as_runtime_ast(ty_ctx).expect("SymGloablValue should always hold an AST!");
         sort.variants[1].constructor.apply(&[&ast])
       },
       SymGlobalValueImpl::Cached { resource, status } => {
-        let ast = resource.as_runtime_ast().expect("SymGloablValue should always hold an AST!");
+        let ast = resource.as_runtime_ast(ty_ctx).expect("SymGloablValue should always hold an AST!");
         match *status.borrow() {
           GlobalDataStatus::Clean => sort.variants[2].constructor.apply(&[&ast]),
           GlobalDataStatus::Dirty => sort.variants[3].constructor.apply(&[&ast]),
@@ -2989,54 +3021,54 @@ impl<'ctx> SymValue<'ctx> {
 **************************************************************************************/
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymStructImpl<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self, _ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.data))
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymVectorImpl<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self, _ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.data))
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymContainer<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self, ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
     use SymContainer::*;
 
     match &self {
       Locals(_) => Err(PartialVMError::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!("{:?} can not be made into ast!", self))),
-      Struct(r) => Ok(r.borrow().as_runtime_ast()?),
+      Struct(r) => Ok(r.borrow().as_runtime_ast(ty_ctx)?),
       Vec(r) | VecU8(r) | VecU64(r) | VecU128(r) | VecBool(r) | VecAddress(r) => {
-        Ok(r.borrow().as_runtime_ast()?)
+        Ok(r.borrow().as_runtime_ast(ty_ctx)?)
       }
     }
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymValueImpl<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self, ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
     use SymValueImpl::*;
   
     match self {
       Invalid => Err(PartialVMError::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!("{:?} can not be made into ast!", self))),
     
-      U8(v) => Ok(v.as_runtime_ast()?),
-      U64(v) => Ok(v.as_runtime_ast()?),
-      U128(v) => Ok(v.as_runtime_ast()?),
-      Bool(v) => Ok(v.as_runtime_ast()?),
-      Address(v) => Ok(v.as_runtime_ast()?),
+      U8(v) => Ok(v.as_runtime_ast(ty_ctx)?),
+      U64(v) => Ok(v.as_runtime_ast(ty_ctx)?),
+      U128(v) => Ok(v.as_runtime_ast(ty_ctx)?),
+      Bool(v) => Ok(v.as_runtime_ast(ty_ctx)?),
+      Address(v) => Ok(v.as_runtime_ast(ty_ctx)?),
     
-      Container(c) => Ok(c.as_runtime_ast()?),
+      Container(c) => Ok(c.as_runtime_ast(ty_ctx)?),
     
-      ContainerRef(_) => Err(PartialVMError::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!("{:?} can not be made into ast!", self))),
-      IndexedRef(_) => Err(PartialVMError::new(StatusCode::INTERNAL_TYPE_ERROR).with_message(format!("{:?} can not be made into ast!", self))),
+      ContainerRef(r) => Ok(r.container().as_runtime_ast(ty_ctx)?),
+      IndexedRef(r) => Ok(r.get_ref(ty_ctx)?.as_runtime_ast(ty_ctx)?),
     }
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymValue<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
-    Ok(self.0.as_runtime_ast()?)
+  fn as_runtime_ast(&self, ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
+    Ok(self.0.as_runtime_ast(ty_ctx)?)
   }
 }

@@ -4,7 +4,11 @@ use crate::{
     interpreter::{SymStack, SymCallStack},
     loader::{Loader, Function},
   },
-  types::values::{SymValue, SymBool},
+  types::{
+    data_store::SymDataStore,
+    memory::SymMemory,
+    values::{SymValue, SymBool},
+  },
 };
 
 use vm::{
@@ -24,10 +28,14 @@ pub trait PluginContext<'ctx> {
   fn operand_stack(&self) -> &SymStack<'ctx>;
   fn path_conditions(&self) -> &Vec<SymBool<'ctx>>;
   fn spec_conditions(&self) -> &Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)>;
+  fn data_store(&self) -> &dyn SymDataStore<'ctx>;
+  fn memory(&self) -> &SymMemory<'ctx>;
   
   fn operand_stack_mut(&mut self) -> &mut SymStack<'ctx>;
   fn path_conditions_mut(&mut self) -> &mut Vec<SymBool<'ctx>>;
   fn spec_conditions_mut(&mut self) -> &mut Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)>;
+  fn data_store_mut(&mut self) -> &mut dyn SymDataStore<'ctx>;
+  fn memory_mut(&mut self) -> &mut SymMemory<'ctx>;
 }
 
 pub trait Plugin {

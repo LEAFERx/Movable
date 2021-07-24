@@ -24,19 +24,20 @@
       "type": "lldb",
       "request": "launch",
       "name": "Debug executable 'movable'",
-      "cargo": {
-        "args": [
-          "build",
-          "--bin=movable",
-          "--package=movable"
-        ],
-        "filter": {
-          "name": "movable",
-          "kind": "bin"
-        }
-      },
+      // "cargo": {
+      //   "args": [
+      //     "build",
+      //     "--bin=movable",
+      //     "--package=movable"
+      //   ],
+      //   "filter": {
+      //     "name": "movable",
+      //     "kind": "bin"
+      //   }
+      // },
+      "program": "target/debug/movable",
       "args": [
-        "testsuites/testcontainerpropagation.mv",
+        "testsuites/aliasing_move_modifies_address_f.mv",
         "-f",
         "f"
       ],

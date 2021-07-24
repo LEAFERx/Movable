@@ -139,6 +139,7 @@ impl<'a> Plugin for VerificationPlugin<'a> {
     return_values: &[SymValue<'ctx>],
   ) -> VMResult<()> {
     let z3_ctx = plugin_ctx.z3_ctx();
+    let ty_ctx = plugin_ctx.ty_ctx();
     let solver = plugin_ctx.solver();
     solver.push();
     solver.assert(self.target.post(z3_ctx, &[], return_values).as_inner()); // TODO: args should not be empty!!
@@ -168,7 +169,7 @@ impl<'a> Plugin for VerificationPlugin<'a> {
       solver.assert(&projected.not());
       match solver.check() {
         SatResult::Sat => {
-          let inputs = HashSet::from_iter(spec_inputs.iter().map(|v| v.as_runtime_ast().unwrap()));
+          let inputs = HashSet::from_iter(spec_inputs.iter().map(|v| v.as_runtime_ast(ty_ctx).unwrap()));
           let projected_input = project(z3_ctx, &pc, &inputs).expect("Quantifier Elimination Failed!");
           let suggested = Bool::and(z3_ctx, &[
             &projected_input.implies(&Bool::and(z3_ctx, &[&projected.not(), phi]).simplify()),

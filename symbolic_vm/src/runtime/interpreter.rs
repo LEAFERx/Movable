@@ -26,6 +26,7 @@ use crate::{
   },
   types::{
     data_store::SymDataStore,
+    memory::{SymMemory, SymLoadResourceResults},
     values::{
       SymU8, SymU64, SymBool, SymAccountAddress, SymIntegerValue,
       SymLocals, SymReference, SymStruct, SymStructRef, SymValue, VMSymValueCast,
@@ -45,7 +46,7 @@ use vm::{
   },
 };
 
-use z3::{Context, Solver, SatResult, Model};
+use z3::{ast::Bool, Context, Solver, SatResult, Model};
 
 // macro_rules! debug_write {
 //   ($($toks: tt)*) => {
@@ -188,7 +189,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               current_frame.pc += 1;
             } else {
               // Ok we have touched the end of the path, now let's report
-              println!("Path explored: {:?}", self.solver);
+              // println!("Path explored: {:?}", self.solver);
               let mut return_values = vec![];
               for _ in 0..current_frame.function.return_count() {
                 let val = self.operand_stack
@@ -199,8 +200,10 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               manager.after_execute(&mut self, return_values.as_slice())?;
               self.solver.check(); // TODO: avoid unchecked get_model
               return Ok(SymInterpreterExecutionResult::Report(ExecutionReport::Returned(
-                self.solver.get_model().expect("No Model Avaliable"), return_values)
-              ));
+                self.solver.get_model().expect("No Model Avaliable"),
+                return_values,
+                self.data_cache.into_memory(),
+              )));
             }
           },
           ExitCode::Call(fh_idx) => {
@@ -297,7 +300,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
             self.solver.assert(&condition.as_inner());
             if self.solver.check() == SatResult::Sat {
               self.path_conditions.push(condition.clone());
-              forks.push(self);
+              forks.push(SymInterpreterForkResult::Fork(self));
               println!("Defualt path SAT");
             }
             
@@ -306,13 +309,71 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
             let neg_condition = SymBool::from_ast(neg_condition_ast);
             if forked_interp.solver.check() == SatResult::Sat {
               forked_interp.path_conditions.push(neg_condition);
-              forks.push(forked_interp);
+              forks.push(SymInterpreterForkResult::Fork(forked_interp));
               println!("Forked path SAT");
             }
             return Ok(SymInterpreterExecutionResult::Fork(forks));
           },
+          ExitCode::GlobalOp(op, SymLoadResourceResults { none, fresh, cached, dirty, deleted }, resource) => {
+            let frame = current_frame.fork();
+            current_frame.pc += 1;
+
+            self.call_stack.push(current_frame).map_err(|frame| {
+              let err = PartialVMError::new(StatusCode::CALL_STACK_OVERFLOW);
+              let err = set_err_info!(frame, err);
+              self.maybe_core_dump(err, &frame)
+            })?;
+            let mut fresh_interp = self.fork();
+            let mut cached_interp = self.fork();
+            let mut dirty_interp = self.fork();
+            let mut deleted_interp = self.fork();
+            let mut none_interp = self;
+
+            let mut forks = vec![];
+
+            macro_rules! fork {
+              ($res: ident, $interp: ident) => {
+                {
+                  let (cond, gv) = $res;
+                  $interp.solver.assert(&cond);
+                  let op_res = match op {
+                    GlobalOp::BorrowGlobal => $interp.borrow_global(gv),
+                    GlobalOp::Exists => $interp.exists(gv),
+                    GlobalOp::MoveFrom => $interp.move_from(gv),
+                    GlobalOp::MoveTo => match &resource {
+                      None => unreachable!(),
+                      Some(r) => {
+                        match r.copy_value() {
+                          Ok(r) => $interp.move_to(gv, r),
+                          Err(e) => Err(e),
+                        }
+                      },
+                    },
+                  }.map_err(|err| set_err_info!(frame, err))?;
+                  if $interp.solver.check() == SatResult::Sat {
+                    $interp.path_conditions.push(SymBool::from_ast(cond));
+                    match op_res {
+                      GlobalOpResult::Success(_) => forks.push(SymInterpreterForkResult::Fork($interp)),
+                      GlobalOpResult::Aborted(err) => forks.push(SymInterpreterForkResult::Aborted(
+                        set_err_info!(frame, err),
+                      )),
+                    }
+                    println!("Global LoadResource as {} path SAT", stringify!($res));
+                  }
+                };
+              };
+            }
+
+            fork!(none, none_interp);
+            fork!(fresh, fresh_interp);
+            fork!(cached, cached_interp);
+            fork!(dirty, dirty_interp);
+            fork!(deleted, deleted_interp);
+
+            return Ok(SymInterpreterExecutionResult::Fork(forks));
+          },
           ExitCode::CatchedAbort(code) => {
-            return Ok(SymInterpreterExecutionResult::Report(ExecutionReport::Aborted(code)));
+            return Ok(SymInterpreterExecutionResult::Report(ExecutionReport::UserAborted(code)));
           },
         }
       }
@@ -432,7 +493,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
     &mut self,
     addr: SymAccountAddress<'ctx>,
     ty: &Type,
-  ) -> PartialVMResult<SymGlobalValue<'ctx>> {
+  ) -> PartialVMResult<SymLoadResourceResults<'ctx>> {
     match self.data_cache.load_resource(addr, ty) {
       Ok(gv) => Ok(gv),
       Err(e) => {
@@ -449,51 +510,79 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   /// BorrowGlobal (mutable and not) opcode.
   fn borrow_global(
     &mut self,
-    addr: SymAccountAddress<'ctx>,
-    ty: &Type,
-  ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-    let g = self.load_resource(addr, ty)?.borrow_global()?;
-    let size = g.size();
-    self.operand_stack.push(g)?;
-    Ok(size)
+    global_value: SymGlobalValue<'ctx>,
+  ) -> PartialVMResult<GlobalOpResult> {
+    let g = global_value.borrow_global();
+    match g {
+      Ok(g) => {
+        let size = g.size();
+        self.operand_stack.push(g)?;
+        Ok(GlobalOpResult::Success(size))
+      },
+      Err(e) => {
+        if e.major_status() == StatusCode::MISSING_DATA {
+          Ok(GlobalOpResult::Aborted(e))
+        } else {
+          Err(e)
+        }
+      }
+    }
   }
 
   /// Exists opcode.
   fn exists(
     &mut self,
-    addr: SymAccountAddress<'ctx>,
-    ty: &Type,
-  ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-    let gv = self.load_resource(addr, ty)?;
-    let mem_size = gv.size();
-    let exists = gv.exists()?;
+    global_value: SymGlobalValue<'ctx>,
+  ) -> PartialVMResult<GlobalOpResult> {
+    let mem_size = global_value.size();
+    let exists = global_value.exists()?;
     self.operand_stack.push(SymValue::from_bool(
       self.get_z3_ctx(), exists))?;
-    Ok(mem_size)
+    // exists will not fail
+    Ok(GlobalOpResult::Success(mem_size))
   }
 
   /// MoveFrom opcode.
   fn move_from(
     &mut self,
-    addr: SymAccountAddress<'ctx>,
-    ty: &Type,
-  ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
-    let resource = self.load_resource(addr, ty)?.move_from()?;
-    let size = resource.size();
-    self.operand_stack.push(resource)?;
-    Ok(size)
+    mut global_value: SymGlobalValue<'ctx>,
+  ) -> PartialVMResult<GlobalOpResult> {
+    let resource = global_value.move_from();
+    match resource {
+      Ok(g) => {
+        let size = g.size();
+        self.operand_stack.push(g)?;
+        Ok(GlobalOpResult::Success(size))
+      },
+      Err(e) => {
+        if e.major_status() == StatusCode::MISSING_DATA {
+          Ok(GlobalOpResult::Aborted(e))
+        } else {
+          Err(e)
+        }
+      }
+    }
   }
 
   /// MoveTo opcode.
   fn move_to(
     &mut self,
-    addr: SymAccountAddress<'ctx>,
-    ty: &Type,
+    mut global_value: SymGlobalValue<'ctx>,
     resource: SymValue<'ctx>,
-  ) -> PartialVMResult<AbstractMemorySize<GasCarrier>> {
+  ) -> PartialVMResult<GlobalOpResult> {
     let size = resource.size();
-    self.load_resource(addr, ty)?.move_to(&mut self.data_cache, resource)?;
-    Ok(size)
+    match global_value.move_to(&mut self.data_cache, resource) {
+      Ok(_) => {
+        Ok(GlobalOpResult::Success(size))
+      },
+      Err(e) => {
+        if e.major_status() == StatusCode::RESOURCE_ALREADY_EXISTS {
+          Ok(GlobalOpResult::Aborted(e))
+        } else {
+          Err(e)
+        }
+      }
+    }
   }
 
   //
@@ -602,6 +691,14 @@ impl<'ctx, 'r, 'l, R: RemoteCache> PluginContext<'ctx> for SymInterpreter<'ctx, 
   fn spec_conditions(&self) -> &Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)> {
     &self.spec_conditions
   }
+  
+  fn data_store(&self) -> &dyn SymDataStore<'ctx> {
+    &self.data_cache
+  }
+
+  fn memory(&self) -> &SymMemory<'ctx> {
+    self.data_cache.memory()
+  }
 
   fn operand_stack_mut(&mut self) -> &mut SymStack<'ctx> {
     &mut self.operand_stack
@@ -614,16 +711,29 @@ impl<'ctx, 'r, 'l, R: RemoteCache> PluginContext<'ctx> for SymInterpreter<'ctx, 
   fn spec_conditions_mut(&mut self) -> &mut Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)> {
     &mut self.spec_conditions
   }
+  
+  fn data_store_mut(&mut self) -> &mut dyn SymDataStore<'ctx> {
+    &mut self.data_cache
+  }
+
+  fn memory_mut(&mut self) -> &mut SymMemory<'ctx> {
+    self.data_cache.memory_mut()
+  }
+}
+
+pub enum SymInterpreterForkResult<'ctx, 'r, 'l, R> {
+  Fork(SymInterpreter<'ctx, 'r, 'l, R>),
+  Aborted(VMError),
 }
 
 pub enum SymInterpreterExecutionResult<'ctx, 'r, 'l, R> {
-  Fork(Vec<SymInterpreter<'ctx, 'r, 'l, R>>),
+  Fork(Vec<SymInterpreterForkResult<'ctx, 'r, 'l, R>>),
   Report(ExecutionReport<'ctx>)
 }
 
 pub enum ExecutionReport<'ctx> {
-  Returned(Model<'ctx>, Vec<SymValue<'ctx>>),
-  Aborted(SymU64<'ctx>),
+  Returned(Model<'ctx>, Vec<SymValue<'ctx>>, SymMemory<'ctx>),
+  UserAborted(SymU64<'ctx>),
 }
 
 // TODO Determine stack size limits based on gas limit
@@ -730,6 +840,20 @@ struct SymFrame<'ctx> {
   ty_args: Vec<Type>,
 }
 
+#[derive(Debug)]
+enum GlobalOp {
+  BorrowGlobal,
+  Exists,
+  MoveFrom,
+  MoveTo,
+}
+
+#[derive(Debug)]
+enum GlobalOpResult {
+  Success(AbstractMemorySize<GasCarrier>),
+  Aborted(PartialVMError),
+}
+
 /// An `ExitCode` from `execute_code_unit`.
 #[derive(Debug)]
 enum ExitCode<'ctx> {
@@ -737,8 +861,9 @@ enum ExitCode<'ctx> {
   Call(FunctionHandleIndex),
   CallGeneric(FunctionInstantiationIndex),
   /// A `BrTrue / BrFalse` opcode was found.
-  /// BrTrue / BrFalse, condition , offset
+  /// BrTrue / BrFalse, condition, offset
   Branch(bool, SymBool<'ctx>, CodeOffset),
+  GlobalOp(GlobalOp, SymLoadResourceResults<'ctx>, Option<SymValue<'ctx>>),
   CatchedAbort(SymU64<'ctx>),
 }
 
@@ -1125,7 +1250,9 @@ impl<'ctx> SymFrame<'ctx> {
           Bytecode::MutBorrowGlobal(sd_idx) | Bytecode::ImmBorrowGlobal(sd_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.get_struct_type(*sd_idx);
-            let _size = interpreter.borrow_global(addr, &ty)?;
+            let gv = interpreter.load_resource(addr, &ty)?;
+            return Ok(ExitCode::GlobalOp(GlobalOp::BorrowGlobal, gv, None));
+            // let _size = interpreter.borrow_global(addr, &ty)?;
             // gas!(
             //   instr: context,
             //   interpreter,
@@ -1137,7 +1264,9 @@ impl<'ctx> SymFrame<'ctx> {
           | Bytecode::ImmBorrowGlobalGeneric(si_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
-            let _size = interpreter.borrow_global(addr, &ty)?;
+            let gv = interpreter.load_resource(addr, &ty)?;
+            return Ok(ExitCode::GlobalOp(GlobalOp::BorrowGlobal, gv, None));
+            // let _size = interpreter.borrow_global(addr, &ty)?;
             // gas!(
             //   instr: context,
             //   interpreter,
@@ -1148,19 +1277,25 @@ impl<'ctx> SymFrame<'ctx> {
           Bytecode::Exists(sd_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.get_struct_type(*sd_idx);
-            let _size = interpreter.exists(addr, &ty)?;
+            let gv = interpreter.load_resource(addr, &ty)?;
+            return Ok(ExitCode::GlobalOp(GlobalOp::Exists, gv, None));
+            // let _size = interpreter.exists(addr, &ty)?;
             // gas!(instr: context, interpreter, Opcodes::EXISTS, size)?;
           }
           Bytecode::ExistsGeneric(si_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
-            let _size = interpreter.exists(addr, &ty)?;
+            let gv = interpreter.load_resource(addr, &ty)?;
+            return Ok(ExitCode::GlobalOp(GlobalOp::Exists, gv, None));
+            // let _size = interpreter.exists(addr, &ty)?;
             // gas!(instr: context, interpreter, Opcodes::EXISTS_GENERIC, size)?;
           }
           Bytecode::MoveFrom(sd_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.get_struct_type(*sd_idx);
-            let _size = interpreter.move_from(addr, &ty)?;
+            let gv = interpreter.load_resource(addr, &ty)?;
+            return Ok(ExitCode::GlobalOp(GlobalOp::MoveFrom, gv, None));
+            // let _size = interpreter.move_from(addr, &ty)?;
             // TODO: Have this calculate before pulling in the data based upon
             // the size of the data that we are about to read in.
             // gas!(instr: context, interpreter, Opcodes::MOVE_FROM, size)?;
@@ -1168,7 +1303,9 @@ impl<'ctx> SymFrame<'ctx> {
           Bytecode::MoveFromGeneric(si_idx) => {
             let addr = interpreter.operand_stack.pop_as::<SymAccountAddress>()?;
             let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
-            let _size = interpreter.move_from(addr, &ty)?;
+            let gv = interpreter.load_resource(addr, &ty)?;
+            return Ok(ExitCode::GlobalOp(GlobalOp::MoveFrom, gv, None));
+            // let _size = interpreter.move_from(addr, &ty)?;
             // TODO: Have this calculate before pulling in the data based upon
             // the size of the data that we are about to read in.
             // gas!(
@@ -1188,7 +1325,9 @@ impl<'ctx> SymFrame<'ctx> {
               .read_ref(ty_ctx)?
               .value_as::<SymAccountAddress>()?;
             let ty = resolver.get_struct_type(*sd_idx);
-            let _size = interpreter.move_to(addr, &ty, resource)?;
+            let gv = interpreter.load_resource(addr, &ty)?;
+            return Ok(ExitCode::GlobalOp(GlobalOp::MoveTo, gv, Some(resource)));
+            // let _size = interpreter.move_to(addr, &ty, resource)?;
             // gas!(instr: context, interpreter, Opcodes::MOVE_TO, size)?;
           }
           Bytecode::MoveToGeneric(si_idx) => {
@@ -1201,7 +1340,9 @@ impl<'ctx> SymFrame<'ctx> {
               .read_ref(ty_ctx)?
               .value_as::<SymAccountAddress>()?;
             let ty = resolver.instantiate_generic_type(*si_idx, self.ty_args())?;
-            let _size = interpreter.move_to(addr, &ty, resource)?;
+            let gv = interpreter.load_resource(addr, &ty)?;
+            return Ok(ExitCode::GlobalOp(GlobalOp::MoveTo, gv, Some(resource)));
+            // let _size = interpreter.move_to(addr, &ty, resource)?;
             // gas!(instr: context, interpreter, Opcodes::MOVE_TO_GENERIC, size)?;
           }
           Bytecode::FreezeRef => {

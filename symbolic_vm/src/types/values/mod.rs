@@ -16,9 +16,9 @@ use z3::{
 };
 
 pub trait SymbolicMoveValue<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>>;
+  fn as_runtime_ast(&self, ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>>;
 
   fn as_value_ast(&self, ty_ctx: &TypeContext<'ctx>, ty: &TypeTag) -> PartialVMResult<Dynamic<'ctx>> {
-    Ok(ty_ctx.runtime_ast_to_value_ast(self.as_runtime_ast()?, ty))
+    Ok(ty_ctx.runtime_ast_to_value_ast(self.as_runtime_ast(ty_ctx)?, ty))
   }
 }

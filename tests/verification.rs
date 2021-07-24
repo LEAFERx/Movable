@@ -87,3 +87,30 @@ fn abs() {
   verification_plugin.add_spec(func_name, abs_spec.wrong);
   exec("testsuites/abs.mv", "f", &z3_ctx, verification_plugin);
 }
+
+#[test]
+fn alias_bar2() {
+  let z3_cfg = Config::new();
+  let z3_ctx = Context::new(&z3_cfg);
+
+  let bar2_spec = Specification::new(
+    |z3_ctx: &Context, _a: &[SymValue]| SymBool::from(&z3_ctx, true),
+    |z3_ctx: &Context, a: &[SymValue], r: &[SymValue]| {
+      // TODO: bad type conversions and clones
+      // TODO: figure it out
+      let arg = VMSymValueCast::<SymU64>::cast(a[0].copy_value().unwrap()).unwrap();
+      let ret = VMSymValueCast::<SymU64>::cast(r[0].copy_value().unwrap()).unwrap();
+      let const_ten = BV::from_u64(&z3_ctx, 10, 64);
+      let arg_ast = arg.as_inner();
+      let ret_ast = ret.as_inner();
+      let cond_pos = arg_ast.bvuge(&const_ten).implies(&ret_ast._eq(&arg_ast));
+      let cond_neg = arg_ast.bvult(&const_ten).implies(&ret_ast._eq(&const_ten.bvsub(&arg_ast)));
+      let cond = Bool::and(&z3_ctx, &[&cond_pos, &cond_neg]);
+      SymBool::from_ast(cond)
+    },
+    |z3_ctx: &Context, _a: &[SymValue]| SymBool::from(&z3_ctx, true)
+  );
+
+  let verification_plugin = VerificationPlugin::new(bar2_spec);
+  exec("testsuites/aliasing_move_modifies_address.mv", "bar2", &z3_ctx, verification_plugin);
+}

@@ -8,7 +8,7 @@ use crate::{
   types::{
     data_store::SymDataStore,
     effects::{SymAccountChangeSet, SymChangeSet, SymEvent},
-    memory::SymMemory,
+    memory::{SymLoadResourceResults, SymMemory},
     values::{SymAccountAddress, SymGlobalValue, SymGlobalValueEffect, SymValue},
   },
 };
@@ -24,7 +24,7 @@ use move_vm_types::{loaded_data::runtime_types::Type, values::Value};
 use std::collections::btree_map::BTreeMap;
 use vm::errors::*;
 
-use z3::Context;
+use z3::{Context};
 
 pub struct SymAccountDataCache {
   // data_map: BTreeMap<Type, (MoveTypeLayout, SymGlobalValue<'ctx>)>,
@@ -88,6 +88,18 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymDataCache<'ctx, 'r, 'l, R> {
         (guid.clone(), *seq, ty.clone(), layout.clone(), val.copy_value().unwrap())
       }).collect(),
     }
+  }
+
+  pub fn memory(&self) -> &SymMemory<'ctx> {
+    &self.memory
+  }
+
+  pub fn memory_mut(&mut self) -> &mut SymMemory<'ctx> {
+    &mut self.memory
+  }
+
+  pub fn into_memory(self) -> SymMemory<'ctx> {
+    self.memory
   }
 
   // pub fn into_effects(self) -> PartialVMResult<(SymChangeSet<'ctx>, Vec<SymEvent<'ctx>>)> {
@@ -239,7 +251,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymDataStore<'ctx> for SymDataCache<'ctx, 'r,
     &mut self,
     addr: SymAccountAddress<'ctx>,
     ty: &Type,
-  ) -> PartialVMResult<SymGlobalValue<'ctx>> {
+  ) -> PartialVMResult<SymLoadResourceResults<'ctx>> {
     let ty = self.loader.type_to_type_tag(ty)?;
     self.memory.load_resource(self.z3_ctx, self.ty_ctx, addr, ty)
   }

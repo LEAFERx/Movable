@@ -9,6 +9,7 @@ use z3::{
   Context,
 };
 use crate::{
+  runtime::context::TypeContext,
   types::values::{
     primitives::SymBool,
     SymbolicMoveValue,
@@ -63,7 +64,7 @@ impl<'ctx> SymAccountAddress<'ctx> {
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymAccountAddress<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self, _ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.ast))
   }
 }

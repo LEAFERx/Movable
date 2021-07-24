@@ -10,6 +10,7 @@ use z3::{
 use std::fmt;
 
 use super::SymbolicMoveValue;
+use crate::runtime::context::TypeContext;
 
 #[derive(Debug, Clone)]
 pub struct SymU8<'ctx> {
@@ -447,25 +448,25 @@ impl<'ctx> SymBool<'ctx> {
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymU8<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self, _ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.ast))
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymU64<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self, _ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.ast))
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymU128<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self, _ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.ast))
   }
 }
 
 impl<'ctx> SymbolicMoveValue<'ctx> for SymBool<'ctx> {
-  fn as_runtime_ast(&self) -> PartialVMResult<Dynamic<'ctx>> {
+  fn as_runtime_ast(&self, _ty_ctx: &TypeContext<'ctx>) -> PartialVMResult<Dynamic<'ctx>> {
     Ok(Dynamic::from_ast(&self.ast))
   }
 }

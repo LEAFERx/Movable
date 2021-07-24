@@ -281,7 +281,7 @@ fn type_tag_datatype_sorts<'ctx>(z3_ctx: &'ctx Z3Context) -> Vec<DatatypeSort<'c
       ("address", DatatypeAccessor::Sort(addr_sort)),
       ("module", DatatypeAccessor::Sort(str_sort.clone())),
       ("name", DatatypeAccessor::Sort(str_sort)),
-      ("type_params_len", DatatypeAccessor::Sort(int_sort)),
+      // ("type_params_len", DatatypeAccessor::Sort(int_sort)),
       ("type_params", DatatypeAccessor::Datatype("TypeTagList".into())),
     ]);
   create_datatypes(vec![t, tl, s])

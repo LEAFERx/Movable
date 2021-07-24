@@ -1,32 +1,36 @@
 use move_core_types::{
-  identifier::Identifier,
-  language_storage::{StructTag, TypeTag},
-  value::{MoveStructLayout, MoveTypeLayout},
+  language_storage::TypeTag,
 };
-use diem_types::account_address::AccountAddress;
 use vm::errors::*;
 
 use crate::{
   runtime::context::TypeContext,
   types::{
     values::{
-      SymbolicMoveValue,
       SymAccountAddress,
       SymValue,
       SymGlobalValue,
-      types::{SymStructTag, SymTypeTag},
+      types::SymTypeTag,
     },
   },
 };
 
 use z3::{
-  ast::{Ast, Array, BV, Datatype, Dynamic},
+  ast::{Ast, Array, Bool, Datatype, Dynamic},
   Context,
   DatatypeSort,
-  RecFuncDecl,
-  Sort,
 };
 
+#[derive(Debug)]
+pub struct SymLoadResourceResults<'ctx> {
+  pub none: (Bool<'ctx>, SymGlobalValue<'ctx>),
+  pub fresh: (Bool<'ctx>, SymGlobalValue<'ctx>),
+  pub cached: (Bool<'ctx>, SymGlobalValue<'ctx>),
+  pub dirty: (Bool<'ctx>, SymGlobalValue<'ctx>),
+  pub deleted: (Bool<'ctx>, SymGlobalValue<'ctx>),
+}
+
+#[derive(Debug)]
 pub struct SymMemory<'ctx> {
   ast: Array<'ctx>,
 }
@@ -40,6 +44,10 @@ impl<'ctx> SymMemory<'ctx> {
 
   pub fn fork(&self) -> Self {
     Self { ast: self.ast.clone() }
+  }
+
+  pub fn into_simplified_ast(self) -> Array<'ctx> {
+    self.ast.simplify()
   }
 
   fn get_raw(&self, key: &Datatype<'ctx>) -> Datatype<'ctx> {
@@ -56,7 +64,7 @@ impl<'ctx> SymMemory<'ctx> {
     ty_ctx: &TypeContext<'ctx>, 
     addr: SymAccountAddress<'ctx>,
     ty: TypeTag,
-  ) -> PartialVMResult<SymGlobalValue<'ctx>> {
+  ) -> PartialVMResult<SymLoadResourceResults<'ctx>> {
     // 1. build SymTypeTag
     let tag = SymTypeTag::from_type_tag(z3_ctx, ty_ctx, &ty).to_ast();
     // 2. build SymMemoryKey
@@ -93,9 +101,8 @@ impl<'ctx> SymMemory<'ctx> {
 }
 
 // TODO: Consider to fork instead of presuppose concrete status
-fn test_global_value_variant<'ctx>(sort: &DatatypeSort<'ctx>, ast: &Datatype<'ctx>, idx: usize) -> bool {
-  sort.variants[idx].tester.apply(&[&Dynamic::from_ast(ast)]).as_bool().unwrap().as_bool()
-    .expect("Global value status should always be concrete")
+fn global_value_variant_condition<'ctx>(sort: &DatatypeSort<'ctx>, ast: &Datatype<'ctx>, idx: usize) -> Bool<'ctx> {
+  sort.variants[idx].tester.apply(&[&Dynamic::from_ast(ast)]).as_bool().unwrap()
 }
 
 fn global_value_ast_to_global_value<'ctx>(
@@ -103,28 +110,39 @@ fn global_value_ast_to_global_value<'ctx>(
   ast: Datatype<'ctx>,
   addr: SymAccountAddress<'ctx>,
   ty: TypeTag,
-) -> PartialVMResult<SymGlobalValue<'ctx>> {
+) -> PartialVMResult<SymLoadResourceResults<'ctx>> {
   let sort = &ty_ctx.global_value_sort();
-  if test_global_value_variant(sort, &ast, 0) {
-    return Ok(SymGlobalValue::none(addr, ty));
-  }
-  if test_global_value_variant(sort, &ast, 1) {
-    let ast = sort.variants[1].accessors[0].apply(&[&ast]);
-    let val = SymValue::from_value_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
-    return SymGlobalValue::fresh(addr, ty, val);
-  }
-  if test_global_value_variant(sort, &ast, 2) {
-    let ast = sort.variants[2].accessors[0].apply(&[&ast]);
-    let val = SymValue::from_value_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
-    return SymGlobalValue::cached(addr, ty, val);
-  }
-  if test_global_value_variant(sort, &ast, 3) {
-    let ast = sort.variants[3].accessors[0].apply(&[&ast]);
-    let val = SymValue::from_value_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
-    return SymGlobalValue::cached_dirty(addr, ty, val);
-  }
-  if test_global_value_variant(sort, &ast, 4) {
-    return Ok(SymGlobalValue::deleted(addr, ty));
-  }
-  unreachable!()
+  let none = (
+    global_value_variant_condition(sort, &ast, 0),
+    SymGlobalValue::none(addr.clone(), ty.clone()),
+  );
+  let fresh = (
+    global_value_variant_condition(sort, &ast, 1),
+    {
+      let ast = sort.variants[1].accessors[0].apply(&[&ast]);
+      let val = SymValue::from_runtime_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
+      SymGlobalValue::fresh(addr.clone(), ty.clone(), val)?
+    },
+  );
+  let cached = (
+    global_value_variant_condition(sort, &ast, 2),
+    {
+      let ast = sort.variants[2].accessors[0].apply(&[&ast]);
+      let val = SymValue::from_runtime_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
+      SymGlobalValue::cached(addr.clone(), ty.clone(), val)?
+    },
+  );
+  let dirty = (
+    global_value_variant_condition(sort, &ast, 3),
+    {
+      let ast = sort.variants[3].accessors[0].apply(&[&ast]);
+      let val = SymValue::from_runtime_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
+      SymGlobalValue::cached_dirty(addr.clone(), ty.clone(), val)?
+    },
+  );
+  let deleted = (
+    global_value_variant_condition(sort, &ast, 4),
+    SymGlobalValue::deleted(addr, ty),
+  );
+  Ok(SymLoadResourceResults { none, fresh, cached, dirty, deleted })
 }
