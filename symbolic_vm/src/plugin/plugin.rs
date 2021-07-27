@@ -7,7 +7,7 @@ use crate::{
   types::{
     data_store::SymDataStore,
     memory::SymMemory,
-    values::{SymValue, SymBool},
+    values::{SymValue, SymBool, SymU64},
   },
 };
 
@@ -29,6 +29,8 @@ pub trait PluginContext<'ctx> {
   fn path_conditions(&self) -> &Vec<SymBool<'ctx>>;
   fn spec_conditions(&self) -> &Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)>;
   fn data_store(&self) -> &dyn SymDataStore<'ctx>;
+  fn args(&self) -> &[SymValue<'ctx>];
+  fn old_memory(&self) -> &SymMemory<'ctx>;
   fn memory(&self) -> &SymMemory<'ctx>;
   
   fn operand_stack_mut(&mut self) -> &mut SymStack<'ctx>;
@@ -64,6 +66,22 @@ pub trait Plugin {
     &self,
     _plugin_context: &mut dyn PluginContext<'ctx>,
     _return_values: &[SymValue<'ctx>],
+  ) -> VMResult<()> {
+    Ok(())
+  }
+
+  fn on_after_execute_user_abort<'ctx>(
+    &self,
+    _plugin_context: &mut dyn PluginContext<'ctx>,
+    _code: &SymU64<'ctx>,
+  ) -> VMResult<()> {
+    Ok(())
+  }
+
+  fn on_after_execute_abort<'ctx>(
+    &self,
+    _plugin_context: &mut dyn PluginContext<'ctx>,
+    _err: &VMError,
   ) -> VMResult<()> {
     Ok(())
   }

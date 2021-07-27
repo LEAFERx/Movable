@@ -102,17 +102,12 @@ enum SymContainer<'ctx> {
 /// or in global storage. In the latter case, it also keeps a status flag indicating whether
 /// the container has been possibly modified.
 /// The location is used for Struct and Vector
+/// Now since we do not distinguish newly published resources and cached resources, we do not
+/// need the status flag.
 #[derive(Debug)]
-enum SymContainerRef<'ctx> {
-  Local {
-    container: SymContainer<'ctx>,
-    location: SymContainerRefLocation<'ctx>,
-  },
-  Global {
-    status: Rc<RefCell<GlobalDataStatus>>,
-    container: SymContainer<'ctx>,
-    location: SymContainerRefLocation<'ctx>,
-  },
+struct SymContainerRef<'ctx> {
+  container: SymContainer<'ctx>,
+  location: SymContainerRefLocation<'ctx>,
 }
 
 /// For write propagation
@@ -127,15 +122,6 @@ enum SymContainerRefLocation<'ctx> {
     addr: SymAccountAddress<'ctx>,
     ty: TypeTag,
   },
-}
-
-/// Status for global (on-chain) data:
-/// Clean - the data was only read.
-/// Dirty - the data was possibly modified.
-#[derive(Debug, Clone, Copy)]
-enum GlobalDataStatus {
-  Clean,
-  Dirty,
 }
 
 // Symbolic is used on vector, while Concrete is used on locals and struct
@@ -249,16 +235,8 @@ pub struct SymStruct<'ctx>(SymStructImpl<'ctx>);
 enum SymGlobalValueImpl<'ctx> {
   /// No resource resides in this slot or in storage.
   None,
-  /// A resource has been published to this slot and it did not previously exist in storage.
-  Fresh { resource: SymContainer<'ctx> },
-  /// A resource resides in this slot and also in storage. The status flag indicates whether
-  /// it has potentially been altered.
-  Cached {
-    resource: SymContainer<'ctx>,
-    status: Rc<RefCell<GlobalDataStatus>>,
-  },
-  /// A resource used to exist in storage but has been deleted by the current transaction.
-  Deleted,
+  /// A resource has been published to this slot.
+  Some { resource: SymContainer<'ctx> },
 }
 
 /// A wrapper around `GlobalValueImpl`, representing a "slot" in global storage that can
@@ -680,15 +658,7 @@ fn take_unique_ownership<T: Debug>(r: Rc<RefCell<T>>) -> PartialVMResult<T> {
 
 impl<'ctx> SymContainerRef<'ctx> {
   fn container(&self) -> &SymContainer<'ctx> {
-    match self {
-      Self::Local { container, .. } | Self::Global { container, ..} => container
-    }
-  }
-
-  fn mark_dirty(&self) {
-    if let Self::Global { status, .. } = self {
-      *status.borrow_mut() = GlobalDataStatus::Dirty;
-    }
+    &self.container
   }
 }
 
@@ -863,16 +833,9 @@ impl<'ctx> SymContainerRefLocation<'ctx> {
 
 impl<'ctx> SymContainerRef<'ctx> {
   fn copy_value(&self) -> Self {
-    match self {
-      Self::Local { container, location } => Self::Local {
-        container: container.copy_by_ref(),
-        location: location.copy_value(),
-      },
-      Self::Global { status, container, location } => Self::Global {
-        status: Rc::clone(status),
-        container: container.copy_by_ref(),
-        location: location.copy_value(),
-      },
+    Self {
+      container: self.container.copy_by_ref(),
+      location: self.location.copy_value(),
     }
   }
 }
@@ -1123,13 +1086,7 @@ impl<'ctx> SymContainerRefLocation<'ctx> {
         Ok(())
       },
       Self::Global { addr, ty } => {
-        let value = match vref {
-          SymContainerRef::Local { container, .. } => SymGlobalValueImpl::Fresh { resource: container.copy_by_ref() },
-          SymContainerRef::Global { container, status, .. } => SymGlobalValueImpl::Cached {
-            resource: container.copy_by_ref(),
-            status: Rc::clone(status),
-          }
-        };
+        let value = SymGlobalValueImpl::Some { resource: vref.container().copy_by_ref() };
         let val = SymGlobalValue {
           address: addr.clone(),
           ty: ty.clone(),
@@ -1144,12 +1101,7 @@ impl<'ctx> SymContainerRefLocation<'ctx> {
 
 impl<'ctx> SymContainerRef<'ctx> {
   fn write_propagate(&self, data_store: &mut impl SymDataStore<'ctx>) -> PartialVMResult<()> {
-    let loc = match self {
-      Self::Local { location, .. } => location,
-      Self::Global { location, .. } => location,
-    };
-    self.mark_dirty();
-    loc.write_propagate(data_store, self.copy_value().read_ref()?, self)
+    self.location.write_propagate(data_store, self.copy_value().read_ref()?, self)
   }
 
   fn write_ref(self, data_store: &mut impl SymDataStore<'ctx>, v: SymValue<'ctx>) -> PartialVMResult<()> {
@@ -1190,7 +1142,6 @@ impl<'ctx> SymContainerRef<'ctx> {
           },
         }
         self.write_propagate(data_store)?;
-        self.mark_dirty();
       }
       _ => {
         return Err(
@@ -1243,7 +1194,6 @@ impl<'ctx> SymIndexedRef<'ctx> {
       }
     }
     self.container_ref.write_propagate(data_store)?;
-    self.container_ref.mark_dirty();
     Ok(())
   }
 }
@@ -1298,18 +1248,10 @@ impl<'ctx> SymContainerRef<'ctx> {
       SymContainer::Locals(r) => match get_local_by_idx!(r.borrow(), idx) {
         // TODO: check for the impossible combinations.
         SymValueImpl::Container(container) => {
-          let r = match self {
-            Self::Local { .. } => Self::Local {
-              container: container.copy_by_ref(),
-              // Locals does not need location
-              location: Loc::Independent,
-            },
-            Self::Global { status, .. } => Self::Global {
-              status: Rc::clone(status),
-              container: container.copy_by_ref(),
-              // Locals does not need location
-              location: Loc::Independent,
-            },
+          let r = Self {
+            container: container.copy_by_ref(),
+            // Locals does not need location
+            location: Loc::Independent,
           };
           SymValueImpl::ContainerRef(r)
         }
@@ -1324,16 +1266,10 @@ impl<'ctx> SymContainerRef<'ctx> {
             idx,
             loc: Box::new(self.copy_value())
           };
-          let r = match self {
-            Self::Local { .. } => Self::Local {
-              container: container.copy_by_ref(),
-              location,
-            },
-            Self::Global { status, .. } => Self::Global {
-              status: Rc::clone(status),
-              container: container.copy_by_ref(),
-              location,
-            }
+          let r = Self {
+            container: container.copy_by_ref(),
+            // Locals does not need location
+            location,
           };
           SymValueImpl::ContainerRef(r)
         },
@@ -1348,16 +1284,10 @@ impl<'ctx> SymContainerRef<'ctx> {
             idx,
             loc: Box::new(self.copy_value())
           };
-          let r = match self {
-            Self::Local { .. } => Self::Local {
-              container: container.copy_by_ref(),
-              location,
-            },
-            Self::Global { status, .. } => Self::Global {
-              status: Rc::clone(status),
-              container: container.copy_by_ref(),
-              location,
-            }
+          let r = Self {
+            container: container.copy_by_ref(),
+            // Locals does not need location
+            location,
           };
           SymValueImpl::ContainerRef(r)
         },
@@ -1396,7 +1326,7 @@ impl<'ctx> SymLocals<'ctx> {
       );
     }
     match &v[idx] {
-      SymValueImpl::Container(c) => Ok(SymValue(SymValueImpl::ContainerRef(SymContainerRef::Local {
+      SymValueImpl::Container(c) => Ok(SymValue(SymValueImpl::ContainerRef(SymContainerRef {
         container: c.copy_by_ref(),
         location: SymContainerRefLocation::Independent,
       }))),
@@ -1406,7 +1336,7 @@ impl<'ctx> SymLocals<'ctx> {
       | SymValueImpl::U128(_)
       | SymValueImpl::Bool(_)
       | SymValueImpl::Address(_) => Ok(SymValue(SymValueImpl::IndexedRef(SymIndexedRef {
-        container_ref: SymContainerRef::Local {
+        container_ref: SymContainerRef {
           container: SymContainer::Locals(Rc::clone(&self.0)),
           location: SymContainerRefLocation::Independent,
         },
@@ -1722,7 +1652,7 @@ impl<'ctx> SymValue<'ctx> {
   }
 
   pub fn sym_signer_reference(ty_ctx: &TypeContext<'ctx>, address: SymAccountAddress<'ctx>) -> Self {
-    SymValue(SymValueImpl::ContainerRef(SymContainerRef::Local {
+    SymValue(SymValueImpl::ContainerRef(SymContainerRef {
       container: SymContainer::signer(ty_ctx, address),
       location: SymContainerRefLocation::Independent,
     }))
@@ -2327,7 +2257,6 @@ impl<'ctx> SymVectorRef<'ctx> {
 
       Locals(_) | Struct(_) => unreachable!(),
     }
-    self.0.mark_dirty();
 
     Ok(())
   }
@@ -2374,7 +2303,6 @@ impl<'ctx> SymVectorRef<'ctx> {
       
       Locals(_) | Struct(_) => unreachable!(),
     };
-    self.0.mark_dirty();
 
     Ok(SymNativeResult::ok(
       cost,
@@ -2409,8 +2337,6 @@ impl<'ctx> SymVectorRef<'ctx> {
 
       Locals(_) | Struct(_) => unreachable!(),
     }
-
-    self.0.mark_dirty();
 
     Ok(SymNativeResult::ok(
       cost,
@@ -2552,8 +2478,8 @@ impl<'ctx> SymGlobalValue<'ctx> {
     // REVIEW: this doesn't seem quite right. Consider changing it to
     // a constant positive size or better, something proportional to the size of the value.
     match &self.value {
-      SymGlobalValueImpl::Fresh { .. } | SymGlobalValueImpl::Cached { .. } => REFERENCE_SIZE,
-      SymGlobalValueImpl::Deleted | SymGlobalValueImpl::None => MIN_EXISTS_DATA_SIZE,
+      SymGlobalValueImpl::Some { .. } => REFERENCE_SIZE,
+      SymGlobalValueImpl::None => MIN_EXISTS_DATA_SIZE,
     }
   }
 }
@@ -2591,40 +2517,23 @@ impl<'ctx> SymStruct<'ctx> {
 **************************************************************************************/
 #[allow(clippy::unnecessary_wraps)]
 impl<'ctx> SymGlobalValueImpl<'ctx> {
-  fn cached(val: SymValueImpl<'ctx>, status: GlobalDataStatus) -> PartialVMResult<Self> {
+  fn some(val: SymValueImpl<'ctx>) -> PartialVMResult<Self> {
     match val {
-      SymValueImpl::Container(resource) => {
-        let status = Rc::new(RefCell::new(status));
-        Ok(Self::Cached { resource, status })
-      }
+      SymValueImpl::Container(resource) => Ok(Self::Some { resource }),
       _ => Err(
         PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-          .with_message("failed to publish cached: not a resource".to_string()),
+          .with_message("failed to publish: not a resource".to_string()),
       ),
     }
   }
 
-  fn fresh(val: SymValueImpl<'ctx>) -> PartialVMResult<Self> {
-      match val {
-        SymValueImpl::Container(resource) => Ok(Self::Fresh { resource }),
-        _ => Err(
-          PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-            .with_message("failed to publish fresh: not a resource".to_string()),
-        ),
-      }
-  }
-
   fn move_from(&mut self) -> PartialVMResult<SymValueImpl<'ctx>> {
     let resource = match self {
-      Self::None | Self::Deleted => {
+      Self::None => {
         return Err(PartialVMError::new(StatusCode::MISSING_DATA))
-      }
-      Self::Fresh { .. } => match std::mem::replace(self, Self::None) {
-        Self::Fresh { resource } => resource,
-        _ => unreachable!(),
       },
-      Self::Cached { .. } => match std::mem::replace(self, Self::Deleted) {
-        Self::Cached { resource, .. } => resource,
+      Self::Some { .. } => match std::mem::replace(self, Self::None) {
+        Self::Some { resource } => resource,
         _ => unreachable!(),
       },
     };
@@ -2639,83 +2548,64 @@ impl<'ctx> SymGlobalValueImpl<'ctx> {
 
   fn move_to(&mut self, val: SymValueImpl<'ctx>) -> PartialVMResult<()> {
     match self {
-      Self::Fresh { .. } | Self::Cached { .. } => {
+      Self::Some { .. } => {
         return Err(PartialVMError::new(StatusCode::RESOURCE_ALREADY_EXISTS))
       }
-      Self::None => *self = Self::fresh(val)?,
-      Self::Deleted => *self = Self::cached(val, GlobalDataStatus::Dirty)?,
+      Self::None => *self = Self::some(val)?,
     }
     Ok(())
   }
 
   fn exists(&self) -> PartialVMResult<bool> {
     match self {
-      Self::Fresh { .. } | Self::Cached { .. } => Ok(true),
-      Self::None | Self::Deleted => Ok(false),
+      Self::Some { .. } => Ok(true),
+      Self::None => Ok(false),
     }
   }
 
   fn borrow_global(&self, addr: SymAccountAddress<'ctx>, ty: TypeTag) -> PartialVMResult<SymValueImpl<'ctx>> {
     match self {
-      Self::None | Self::Deleted => Err(PartialVMError::new(StatusCode::MISSING_DATA)),
-      Self::Fresh { resource } => Ok(SymValueImpl::ContainerRef(SymContainerRef::Local {
+      Self::None => Err(PartialVMError::new(StatusCode::MISSING_DATA)),
+      Self::Some { resource } => Ok(SymValueImpl::ContainerRef(SymContainerRef {
         container: resource.copy_by_ref(),
         location: SymContainerRefLocation::Global {
           addr,
           ty,
         },
-      })),
-      Self::Cached { resource, status } => Ok(SymValueImpl::ContainerRef(SymContainerRef::Global {
-        container: resource.copy_by_ref(),
-        location: SymContainerRefLocation::Global {
-          addr,
-          ty,
-        },
-        status: Rc::clone(status),
       })),
     }
   }
 
-  fn into_effect(self) -> PartialVMResult<SymGlobalValueEffect<SymValueImpl<'ctx>>> {
-    Ok(match self {
-      Self::None => SymGlobalValueEffect::None,
-      Self::Deleted => SymGlobalValueEffect::Deleted,
-      Self::Fresh { resource } => {
-        SymGlobalValueEffect::Changed(SymValueImpl::Container(resource))
-      }
-      Self::Cached { resource, status } => match &*status.borrow() {
-        GlobalDataStatus::Dirty => {
-          SymGlobalValueEffect::Changed(SymValueImpl::Container(resource))
-        }
-        GlobalDataStatus::Clean => SymGlobalValueEffect::None,
-      },
-    })
-  }
+  // fn into_effect(self) -> PartialVMResult<SymGlobalValueEffect<SymValueImpl<'ctx>>> {
+  //   Ok(match self {
+  //     Self::None => SymGlobalValueEffect::None,
+  //     Self::Deleted => SymGlobalValueEffect::Deleted,
+  //     Self::Fresh { resource } => {
+  //       SymGlobalValueEffect::Changed(SymValueImpl::Container(resource))
+  //     }
+  //     Self::Cached { resource, status } => match &*status.borrow() {
+  //       GlobalDataStatus::Dirty => {
+  //         SymGlobalValueEffect::Changed(SymValueImpl::Container(resource))
+  //       }
+  //       GlobalDataStatus::Clean => SymGlobalValueEffect::None,
+  //     },
+  //   })
+  // }
 
   fn is_mutated(&self) -> bool {
     match self {
       Self::None => false,
-      Self::Deleted => true,
-      Self::Fresh { resource: _ } => true,
-      Self::Cached { resource: _, status } => match &*status.borrow() {
-        GlobalDataStatus::Dirty => true,
-        GlobalDataStatus::Clean => false,
-      },
+      Self::Some { .. } => true,
     }
   }
 
   fn fork(&self) -> Self {
     match self {
       SymGlobalValueImpl::None => SymGlobalValueImpl::None,
-      SymGlobalValueImpl::Fresh { resource } => SymGlobalValueImpl::Fresh {
+      SymGlobalValueImpl::Some { resource } => SymGlobalValueImpl::Some {
         // Only Locals will fail copy_value(), which is impossible in global value
         resource: resource.copy_value().unwrap(),
       },
-      SymGlobalValueImpl::Cached { resource, status } => SymGlobalValueImpl::Cached {
-        resource: resource.copy_value().unwrap(),
-        status: Rc::new(RefCell::new(status.borrow().clone())),
-      },
-      SymGlobalValueImpl::Deleted => SymGlobalValueImpl::Deleted,
     }
   }
 }
@@ -2729,42 +2619,12 @@ impl<'ctx> SymGlobalValue<'ctx> {
     }
   }
 
-  pub(crate) fn fresh(address: SymAccountAddress<'ctx>, ty: TypeTag, val: SymValue<'ctx>) -> PartialVMResult<Self> {
+  pub(crate) fn some(address: SymAccountAddress<'ctx>, ty: TypeTag, val: SymValue<'ctx>) -> PartialVMResult<Self> {
     Ok(Self {
       address,
       ty,
-      value: SymGlobalValueImpl::fresh(val.0)?
+      value: SymGlobalValueImpl::some(val.0)?
     })
-  }
-
-  pub fn cached(address: SymAccountAddress<'ctx>, ty: TypeTag, val: SymValue<'ctx>) -> PartialVMResult<Self> {
-    Ok(Self {
-      address,
-      ty,
-      value: SymGlobalValueImpl::cached(
-        val.0,
-        GlobalDataStatus::Clean,
-      )?,
-    })
-  }
-
-  pub(crate) fn cached_dirty(address: SymAccountAddress<'ctx>, ty: TypeTag, val: SymValue<'ctx>) -> PartialVMResult<Self> {
-    Ok(Self {
-      address,
-      ty,
-      value: SymGlobalValueImpl::cached(
-        val.0,
-        GlobalDataStatus::Dirty,
-      )?,
-    })
-  }
-
-  pub(crate) fn deleted(address: SymAccountAddress<'ctx>, ty: TypeTag) -> Self {
-    Self {
-      address,
-      ty,
-      value: SymGlobalValueImpl::Deleted,
-    }
   }
 
   pub fn move_from(&mut self) -> PartialVMResult<SymValue<'ctx>> {
@@ -2784,13 +2644,13 @@ impl<'ctx> SymGlobalValue<'ctx> {
     self.value.exists()
   }
 
-  pub fn into_effect(self) -> PartialVMResult<SymGlobalValueEffect<SymValue<'ctx>>> {
-    Ok(match self.value.into_effect()? {
-      SymGlobalValueEffect::None => SymGlobalValueEffect::None,
-      SymGlobalValueEffect::Deleted => SymGlobalValueEffect::Deleted,
-      SymGlobalValueEffect::Changed(v) => SymGlobalValueEffect::Changed(SymValue(v)),
-    })
-  }
+  // pub fn into_effect(self) -> PartialVMResult<SymGlobalValueEffect<SymValue<'ctx>>> {
+  //   Ok(match self.value.into_effect()? {
+  //     SymGlobalValueEffect::None => SymGlobalValueEffect::None,
+  //     SymGlobalValueEffect::Deleted => SymGlobalValueEffect::Deleted,
+  //     SymGlobalValueEffect::Changed(v) => SymGlobalValueEffect::Changed(SymValue(v)),
+  //   })
+  // }
 
   pub fn address(&self) -> &SymAccountAddress<'ctx> {
     &self.address
@@ -2804,18 +2664,10 @@ impl<'ctx> SymGlobalValue<'ctx> {
     let sort = ty_ctx.global_value_sort();
     match &self.value {
       SymGlobalValueImpl::None => sort.variants[0].constructor.apply(&[]),
-      SymGlobalValueImpl::Fresh { resource } => {
+      SymGlobalValueImpl::Some { resource } => {
         let ast = resource.as_runtime_ast(ty_ctx).expect("SymGloablValue should always hold an AST!");
         sort.variants[1].constructor.apply(&[&ast])
       },
-      SymGlobalValueImpl::Cached { resource, status } => {
-        let ast = resource.as_runtime_ast(ty_ctx).expect("SymGloablValue should always hold an AST!");
-        match *status.borrow() {
-          GlobalDataStatus::Clean => sort.variants[2].constructor.apply(&[&ast]),
-          GlobalDataStatus::Dirty => sort.variants[3].constructor.apply(&[&ast]),
-        }
-      }
-      SymGlobalValueImpl::Deleted => sort.variants[4].constructor.apply(&[]),
     }.as_datatype().unwrap()
   }
 
@@ -2881,31 +2733,12 @@ impl<'ctx> Display for SymContainerRef<'ctx> {
     use SymContainerRefLocation::*;
 
     // TODO: this could panic.
-    match self {
-      Self::Local { container, location } => {
-        let loc = match location {
-          Dependent { idx, loc } => format!(" @ {}<{:?}>", loc.as_ref(), idx),
-          Independent => "".to_string(),
-          Global { addr, ty } => format!(" @ Global[<{:?}, {:?}>]", addr, ty),
-        };
-        write!(f, "({}, {}{})", container.rc_count(), container, loc)
-      },
-      Self::Global { status, container, location } => {
-        let loc = match location {
-          Dependent { idx, loc } => format!(" @ {}<{:?}>", loc.as_ref(), idx),
-          Independent => "".to_string(),
-          Global { addr, ty } => format!(" @ Global[<{:?}, {:?}>]", addr, ty),
-        };
-        write!(
-          f,
-          "({:?}, {}, {}{})",
-          &*status.borrow(),
-          container.rc_count(),
-          container,
-          loc,
-        )
-      },
-    }
+    let loc = match &self.location {
+      Dependent { idx, loc } => format!(" @ {}<{:?}>", loc.as_ref(), idx),
+      Independent => "".to_string(),
+      Global { addr, ty } => format!(" @ Global[<{:?}, {:?}>]", addr, ty),
+    };
+    write!(f, "({}, {}{})", self.container.rc_count(), self.container, loc)
   }
 }
 

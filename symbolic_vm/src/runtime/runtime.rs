@@ -204,11 +204,13 @@ impl<'ctx> VMRuntime<'ctx> {
             for result in forks {
               match result {
                 SymInterpreterForkResult::Fork(interp) => interp_stack.push(interp),
-                SymInterpreterForkResult::Aborted(err) => {
+                SymInterpreterForkResult::Aborted(mut interp, err) => {
+                  plugin_manager.on_after_execute_abort(&mut interp, &err)?;
                   println!("-------REPORT BEGIN-------");
                   println!("Function aborted.");
                   println!("Error: {:?}", err);
                   println!("-------REPORT END---------");
+                  println!();
                 }
               }
             }
@@ -227,15 +229,17 @@ impl<'ctx> VMRuntime<'ctx> {
                   let ast = val.as_runtime_ast(self.ty_ctx()).map_err(|e| e.finish(Location::Undefined))?;
                   println!("Index {}: {:#?}", idx, model.eval(&ast, true));
                 }
-                println!("Memory:");
-                println!("{:?}", memory);
+                // println!("Memory:");
+                // println!("{:?}", memory);
                 println!("-------REPORT END---------");
+                println!();
               },
               ExecutionReport::UserAborted(code) => {
                 println!("-------REPORT BEGIN-------");
                 println!("Function aborted by user.");
                 println!("Code: {:?}", code);
                 println!("-------REPORT END---------");
+                println!();
               }
             }
           }

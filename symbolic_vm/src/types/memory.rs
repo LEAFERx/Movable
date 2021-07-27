@@ -24,10 +24,7 @@ use z3::{
 #[derive(Debug)]
 pub struct SymLoadResourceResults<'ctx> {
   pub none: (Bool<'ctx>, SymGlobalValue<'ctx>),
-  pub fresh: (Bool<'ctx>, SymGlobalValue<'ctx>),
-  pub cached: (Bool<'ctx>, SymGlobalValue<'ctx>),
-  pub dirty: (Bool<'ctx>, SymGlobalValue<'ctx>),
-  pub deleted: (Bool<'ctx>, SymGlobalValue<'ctx>),
+  pub some: (Bool<'ctx>, SymGlobalValue<'ctx>),
 }
 
 #[derive(Debug)]
@@ -102,7 +99,7 @@ impl<'ctx> SymMemory<'ctx> {
 
 // TODO: Consider to fork instead of presuppose concrete status
 fn global_value_variant_condition<'ctx>(sort: &DatatypeSort<'ctx>, ast: &Datatype<'ctx>, idx: usize) -> Bool<'ctx> {
-  sort.variants[idx].tester.apply(&[&Dynamic::from_ast(ast)]).as_bool().unwrap()
+  sort.variants[idx].tester.apply(&[ast]).as_bool().unwrap()
 }
 
 fn global_value_ast_to_global_value<'ctx>(
@@ -116,33 +113,13 @@ fn global_value_ast_to_global_value<'ctx>(
     global_value_variant_condition(sort, &ast, 0),
     SymGlobalValue::none(addr.clone(), ty.clone()),
   );
-  let fresh = (
+  let some = (
     global_value_variant_condition(sort, &ast, 1),
     {
       let ast = sort.variants[1].accessors[0].apply(&[&ast]);
       let val = SymValue::from_runtime_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
-      SymGlobalValue::fresh(addr.clone(), ty.clone(), val)?
+      SymGlobalValue::some(addr.clone(), ty.clone(), val)?
     },
   );
-  let cached = (
-    global_value_variant_condition(sort, &ast, 2),
-    {
-      let ast = sort.variants[2].accessors[0].apply(&[&ast]);
-      let val = SymValue::from_runtime_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
-      SymGlobalValue::cached(addr.clone(), ty.clone(), val)?
-    },
-  );
-  let dirty = (
-    global_value_variant_condition(sort, &ast, 3),
-    {
-      let ast = sort.variants[3].accessors[0].apply(&[&ast]);
-      let val = SymValue::from_runtime_ast_with_type(ty_ctx.z3_ctx(), ty_ctx, ast, &ty)?;
-      SymGlobalValue::cached_dirty(addr.clone(), ty.clone(), val)?
-    },
-  );
-  let deleted = (
-    global_value_variant_condition(sort, &ast, 4),
-    SymGlobalValue::deleted(addr, ty),
-  );
-  Ok(SymLoadResourceResults { none, fresh, cached, dirty, deleted })
+  Ok(SymLoadResourceResults { none, some })
 }

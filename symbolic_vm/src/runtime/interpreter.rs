@@ -85,6 +85,7 @@ pub struct SymInterpreter<'ctx, 'r, 'l, R> {
   /// The stack of active functions.
   call_stack: SymCallStack<'ctx>,
   // gas_schedule: &'vtxn CostTable,
+  args: Vec<SymValue<'ctx>>,
   /// Z3 solver
   pub solver: Solver<'ctx>,
   pub path_conditions: Vec<SymBool<'ctx>>,
@@ -103,7 +104,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
     data_cache: SymDataCache<'ctx, 'r, 'l, R>,
     // cost_strategy: &mut 
   ) -> VMResult<Self> {
-    let mut interp = Self::new(z3_ctx, data_cache);
+    let mut interp = Self::new(z3_ctx, data_cache, args.as_slice());
     
     let mut locals = SymLocals::new(z3_ctx, function.local_count());
     // TODO: assert consistency of args and function formals
@@ -126,10 +127,12 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
     z3_ctx: &'ctx Context,
     // cost_strategy: &mut 
     data_cache: SymDataCache<'ctx, 'r, 'l, R>,
+    args: &[SymValue<'ctx>],
   ) -> Self {
     SymInterpreter {
       operand_stack: SymStack::new(),
       call_stack: SymCallStack::new(),
+      args: args.iter().map(|v| v.copy_value().unwrap()).collect(),
       solver: Solver::new(z3_ctx),
       path_conditions: vec![],
       spec_conditions: vec![],
@@ -141,6 +144,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
     SymInterpreter {
       operand_stack: self.operand_stack.fork(),
       call_stack: self.call_stack.fork(),
+      args: self.args.iter().map(|v| v.copy_value().unwrap()).collect(),
       solver: self.solver.translate(self.solver.get_context()),
       path_conditions: self.path_conditions.clone(),
       spec_conditions: self.spec_conditions.iter().map(
@@ -189,7 +193,6 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               current_frame.pc += 1;
             } else {
               // Ok we have touched the end of the path, now let's report
-              // println!("Path explored: {:?}", self.solver);
               let mut return_values = vec![];
               for _ in 0..current_frame.function.return_count() {
                 let val = self.operand_stack
@@ -199,6 +202,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               }
               manager.after_execute(&mut self, return_values.as_slice())?;
               self.solver.check(); // TODO: avoid unchecked get_model
+              // println!("Path explored: {:?}", self.path_conditions);
               return Ok(SymInterpreterExecutionResult::Report(ExecutionReport::Returned(
                 self.solver.get_model().expect("No Model Avaliable"),
                 return_values,
@@ -265,13 +269,6 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
             current_frame = frame;
           },
           ExitCode::Branch(instr, condition, offset) => {
-            println!(
-              "Hit Br{{{:?}}} instr, condition is {:?}, target offset is {:?}",
-              instr,
-              condition,
-              offset,
-            );
-
             let mut forks = vec![];
 
             let mut forked_interp = self.fork();
@@ -301,7 +298,6 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
             if self.solver.check() == SatResult::Sat {
               self.path_conditions.push(condition.clone());
               forks.push(SymInterpreterForkResult::Fork(self));
-              println!("Defualt path SAT");
             }
             
             let neg_condition_ast = condition.as_inner().not();
@@ -310,11 +306,10 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
             if forked_interp.solver.check() == SatResult::Sat {
               forked_interp.path_conditions.push(neg_condition);
               forks.push(SymInterpreterForkResult::Fork(forked_interp));
-              println!("Forked path SAT");
             }
             return Ok(SymInterpreterExecutionResult::Fork(forks));
           },
-          ExitCode::GlobalOp(op, SymLoadResourceResults { none, fresh, cached, dirty, deleted }, resource) => {
+          ExitCode::GlobalOp(op, SymLoadResourceResults { none, some }, resource) => {
             let frame = current_frame.fork();
             current_frame.pc += 1;
 
@@ -323,10 +318,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
               let err = set_err_info!(frame, err);
               self.maybe_core_dump(err, &frame)
             })?;
-            let mut fresh_interp = self.fork();
-            let mut cached_interp = self.fork();
-            let mut dirty_interp = self.fork();
-            let mut deleted_interp = self.fork();
+            let mut some_interp = self.fork();
             let mut none_interp = self;
 
             let mut forks = vec![];
@@ -351,28 +343,29 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
                     },
                   }.map_err(|err| set_err_info!(frame, err))?;
                   if $interp.solver.check() == SatResult::Sat {
+                    // println!("!!!Global fork!!! {:?}::{:?} can be {}", addr, ty, stringify!($res));
                     $interp.path_conditions.push(SymBool::from_ast(cond));
                     match op_res {
-                      GlobalOpResult::Success(_) => forks.push(SymInterpreterForkResult::Fork($interp)),
-                      GlobalOpResult::Aborted(err) => forks.push(SymInterpreterForkResult::Aborted(
-                        set_err_info!(frame, err),
-                      )),
+                      GlobalOpResult::Success(_) => {
+                        forks.push(SymInterpreterForkResult::Fork($interp));
+                      },
+                      GlobalOpResult::Aborted(err) => {
+                        let err = set_err_info!(frame, err);
+                        forks.push(SymInterpreterForkResult::Aborted($interp, err));
+                      },
                     }
-                    println!("Global LoadResource as {} path SAT", stringify!($res));
                   }
                 };
               };
             }
 
             fork!(none, none_interp);
-            fork!(fresh, fresh_interp);
-            fork!(cached, cached_interp);
-            fork!(dirty, dirty_interp);
-            fork!(deleted, deleted_interp);
+            fork!(some, some_interp);
 
             return Ok(SymInterpreterExecutionResult::Fork(forks));
           },
           ExitCode::CatchedAbort(code) => {
+            manager.on_after_execute_user_abort(&mut self, &code)?;
             return Ok(SymInterpreterExecutionResult::Report(ExecutionReport::UserAborted(code)));
           },
         }
@@ -691,9 +684,17 @@ impl<'ctx, 'r, 'l, R: RemoteCache> PluginContext<'ctx> for SymInterpreter<'ctx, 
   fn spec_conditions(&self) -> &Vec<(Vec<SymValue<'ctx>>, SymBool<'ctx>)> {
     &self.spec_conditions
   }
+
+  fn args(&self) -> &[SymValue<'ctx>] {
+    self.args.as_slice()
+  }
   
   fn data_store(&self) -> &dyn SymDataStore<'ctx> {
     &self.data_cache
+  }
+
+  fn old_memory(&self) -> &SymMemory<'ctx> {
+    self.data_cache.old_memory()
   }
 
   fn memory(&self) -> &SymMemory<'ctx> {
@@ -723,7 +724,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> PluginContext<'ctx> for SymInterpreter<'ctx, 
 
 pub enum SymInterpreterForkResult<'ctx, 'r, 'l, R> {
   Fork(SymInterpreter<'ctx, 'r, 'l, R>),
-  Aborted(VMError),
+  Aborted(SymInterpreter<'ctx, 'r, 'l, R>, VMError),
 }
 
 pub enum SymInterpreterExecutionResult<'ctx, 'r, 'l, R> {
@@ -840,6 +841,8 @@ struct SymFrame<'ctx> {
   ty_args: Vec<Type>,
 }
 
+
+// TODO: Consider not to fork on Exists opcode
 #[derive(Debug)]
 enum GlobalOp {
   BorrowGlobal,

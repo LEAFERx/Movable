@@ -58,6 +58,7 @@ pub struct SymDataCache<'ctx, 'r, 'l, R> {
   ty_ctx: &'l TypeContext<'ctx>,
   remote: &'r R,
   loader: &'l Loader,
+  old_memory: SymMemory<'ctx>,
   memory: SymMemory<'ctx>,
   account_map: BTreeMap<AccountAddress, SymAccountDataCache>,
   event_data: Vec<(Vec<u8>, u64, Type, MoveTypeLayout, SymValue<'ctx>)>,
@@ -65,13 +66,16 @@ pub struct SymDataCache<'ctx, 'r, 'l, R> {
 
 impl<'ctx, 'r, 'l, R: RemoteCache> SymDataCache<'ctx, 'r, 'l, R> {
   pub(crate) fn new(z3_ctx: &'ctx Context, ty_ctx: &'l TypeContext<'ctx>, remote: &'r R, loader: &'l Loader) -> Self {
+    // TODO: Provide ways to customize initial memory
+    let memory = SymMemory::new(z3_ctx, ty_ctx);
     Self {
       z3_ctx,
       ty_ctx,
       remote,
       loader,
       account_map: BTreeMap::new(),
-      memory: SymMemory::new(z3_ctx, ty_ctx),
+      old_memory: memory.fork(),
+      memory,
       event_data: vec![],
     }
   }
@@ -83,11 +87,16 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymDataCache<'ctx, 'r, 'l, R> {
       remote: self.remote,
       loader: self.loader,
       account_map: self.account_map.iter().map(|(addr, data)| (addr.clone(), data.fork())).collect(),
+      old_memory: self.old_memory.fork(),
       memory: self.memory.fork(),
       event_data: self.event_data.iter().map(|(guid, seq, ty, layout, val)| {
         (guid.clone(), *seq, ty.clone(), layout.clone(), val.copy_value().unwrap())
       }).collect(),
     }
+  }
+
+  pub fn old_memory(&self) -> &SymMemory<'ctx> {
+    &self.old_memory
   }
 
   pub fn memory(&self) -> &SymMemory<'ctx> {

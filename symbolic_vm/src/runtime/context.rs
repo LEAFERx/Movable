@@ -3,7 +3,6 @@ use move_core_types::{
   language_storage::{StructTag, TypeTag},
   value::{MoveStructLayout, MoveTypeLayout},
 };
-use diem_types::account_address::AccountAddress;
 
 use std::{
   cell::RefCell,
@@ -38,9 +37,6 @@ pub struct ValueListFunctionDecls<'ctx> {
 #[derive(Debug)]
 pub struct TypeContext<'ctx> {
   z3_ctx: &'ctx Z3Context,
-
-  signer_tag: StructTag,
-  signer_sort: Rc<DatatypeSort<'ctx>>,
 
   type_tag_sort: Rc<DatatypeSort<'ctx>>,
   type_tag_list_sort: Rc<DatatypeSort<'ctx>>,
@@ -78,8 +74,6 @@ impl<'ctx> TypeContext<'ctx> {
 
     Self {
       z3_ctx,
-      signer_tag: signer_tag(),
-      signer_sort: Rc::new(signer_sort(z3_ctx)),
 
       type_tag_sort: Rc::new(type_tag_sort),
       type_tag_list_sort: Rc::new(type_tag_list_sort),
@@ -103,14 +97,6 @@ impl<'ctx> TypeContext<'ctx> {
 
   pub fn z3_ctx(&self) -> &'ctx Z3Context {
     self.z3_ctx
-  }
-
-  pub fn signer_tag(&self) -> &StructTag {
-    &self.signer_tag
-  }
-
-  pub fn signer_sort(&self) -> Rc<DatatypeSort<'ctx>> {
-    Rc::clone(&self.signer_sort)
   }
 
   pub fn type_tag_sort(&self) -> Rc<DatatypeSort<'ctx>> {
@@ -237,19 +223,6 @@ impl<'ctx> TypeContext<'ctx> {
 }
 
 // Singer
-
-// A fake signer tag
-// Should only be used in signer container
-// TODO: consider remove this by refactoring SymStructImpl (struct_type field)
-fn signer_tag() -> StructTag {
-  StructTag {
-    address: AccountAddress::from_hex_literal("0x1").unwrap(),
-    module: Identifier::new("Signer").unwrap(),
-    name: Identifier::new("signer").unwrap(),
-    type_params: vec![TypeTag::Address],
-  }
-}
-
 fn signer_sort<'ctx>(z3_ctx: &'ctx Z3Context) -> DatatypeSort<'ctx> {
   DatatypeBuilder::new(z3_ctx, "signer")
     .variant("signer", vec![("a", DatatypeAccessor::Sort(Sort::bitvector(z3_ctx, 128)))])
@@ -275,13 +248,11 @@ fn type_tag_datatype_sorts<'ctx>(z3_ctx: &'ctx Z3Context) -> Vec<DatatypeSort<'c
     ]);
   let addr_sort = Sort::bitvector(z3_ctx, 128);
   let str_sort = Sort::string(z3_ctx);
-  let int_sort = Sort::int(z3_ctx);
   let s = DatatypeBuilder::new(z3_ctx, "StructTag")
     .variant("StructTag", vec![
       ("address", DatatypeAccessor::Sort(addr_sort)),
       ("module", DatatypeAccessor::Sort(str_sort.clone())),
       ("name", DatatypeAccessor::Sort(str_sort)),
-      // ("type_params_len", DatatypeAccessor::Sort(int_sort)),
       ("type_params", DatatypeAccessor::Datatype("TypeTagList".into())),
     ]);
   create_datatypes(vec![t, tl, s])
@@ -293,7 +264,6 @@ fn value_datatype_sorts<'ctx>(z3_ctx: &'ctx Z3Context) -> Vec<DatatypeSort<'ctx>
   let u8_ = Sort::bitvector(z3_ctx, 8);
   let u64_ = Sort::bitvector(z3_ctx, 64);
   let u128_ = Sort::bitvector(z3_ctx, 128);
-  let int = Sort::int(z3_ctx);
   let v = DatatypeBuilder::new(z3_ctx, "Value")
     .variant("Bool", vec![("val", DatatypeAccessor::Sort(bool_))])
     .variant("U8", vec![("val", DatatypeAccessor::Sort(u8_))])
@@ -315,10 +285,7 @@ fn value_datatype_sorts<'ctx>(z3_ctx: &'ctx Z3Context) -> Vec<DatatypeSort<'ctx>
 fn global_value_datatype_sort<'ctx>(z3_ctx: &'ctx Z3Context, value_list_sort: &Sort<'ctx>) -> DatatypeSort<'ctx> {
   DatatypeBuilder::new(z3_ctx, "SymGlobalValue")
     .variant("None", vec![])
-    .variant("Fresh", vec![("value", DatatypeAccessor::Sort(value_list_sort.clone()))])
-    .variant("CachedClean", vec![("value", DatatypeAccessor::Sort(value_list_sort.clone()))])
-    .variant("CachedDirty", vec![("value", DatatypeAccessor::Sort(value_list_sort.clone()))])
-    .variant("Deleted", vec![])
+    .variant("Some", vec![("value", DatatypeAccessor::Sort(value_list_sort.clone()))])
     .finish()
 }
 
@@ -495,7 +462,6 @@ fn fresh_value_const<'ctx>(
   prefix: &str,
 ) -> Dynamic<'ctx> {
   let vsort = ty_ctx.value_sort();
-  let vlsort = ty_ctx.value_list_sort();
 
   match ty {
     TypeTag::Bool => vsort.variants[0].constructor.apply(&[&Bool::fresh_const(z3_ctx, prefix)]),
@@ -527,7 +493,7 @@ fn fresh_value_list_const<'ctx>(
       // Nil
       &vlsort.variants[0].constructor.apply(&[]),
     ]),
-    TypeTag::Vector(ty) => {
+    TypeTag::Vector(_) => {
       // TODO: There is no good way to constraint all value in value list to be the same type with dynamic list size
       // TODO: Maybe add constraints to solver?
       Datatype::fresh_const(z3_ctx, prefix, &vlsort.sort).into()

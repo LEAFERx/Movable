@@ -3,7 +3,7 @@ use crate::{
   runtime::{
     loader::{Loader, Function},
   },
-  types::values::SymValue,
+  types::values::{SymValue, SymU64},
 };
 
 use vm::{
@@ -68,6 +68,28 @@ impl<'a> PluginManager<'a> {
   ) -> VMResult<()> {
     for plugin in self.plugins.iter() {
       plugin.on_after_execute(plugin_context, return_values)?;
+    }
+    Ok(())
+  }
+
+  pub(crate) fn on_after_execute_user_abort<'ctx>(
+    &self,
+    plugin_context: &mut dyn PluginContext<'ctx>,
+    code: &SymU64<'ctx>,
+  ) -> VMResult<()> {
+    for plugin in self.plugins.iter() {
+      plugin.on_after_execute_user_abort(plugin_context, code)?;
+    }
+    Ok(())
+  }
+
+  pub(crate) fn on_after_execute_abort<'ctx>(
+    &self,
+    plugin_context: &mut dyn PluginContext<'ctx>,
+    err: &VMError,
+  ) -> VMResult<()> {
+    for plugin in self.plugins.iter() {
+      plugin.on_after_execute_abort(plugin_context, err)?;
     }
     Ok(())
   }
