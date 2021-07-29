@@ -1,0 +1,55 @@
+//! account: Alice, 1000000
+//! account: Bob, 1000000
+
+//! sender: Alice
+module Test{
+    import 0x1.DiemAccount;
+    import 0x1.XUS;
+    import 0x1.Diem;
+
+
+    public TOD_Transaction1(account: signer, receiver: address, reward: u64) {
+        let with_cap: DiemAccount.WithdrawCapability;
+    
+        with_cap = DiemAccount.extract_withdraw_capability(&account);
+        DiemAccount.pay_from<XUS.XUS>(&with_cap, move(receiver), move(reward),h"",  h"");
+        DiemAccount.restore_withdraw_capability(move(with_cap));
+        
+        return;
+    }
+
+    public TOD_Transaction2(account: signer, receiver: address, reward: u64) {
+        let with_cap: DiemAccount.WithdrawCapability;
+    
+        with_cap = DiemAccount.extract_withdraw_capability(&account);
+        DiemAccount.pay_from<XUS.XUS>(&with_cap, move(receiver), move(reward),h"",  h"");
+        DiemAccount.restore_withdraw_capability(move(with_cap));
+        
+        return;
+    }
+
+    public TOD_Attack(account: signer,
+                  sender:address, 
+                  owner:address, 
+                  reward:u64, 
+                  metadata:u64):bool {
+    // check whether sender is owner
+    let lock:bool;
+    let diff:u64;
+    let solution:u64;
+    lock = false;
+    diff = 111111;
+    if (copy(sender) == copy(owner)) {    
+        if (copy(metadata)==0) {return false;} 
+        if (copy(lock)) {return false;}  
+        if (copy(metadata) >= 111) {return false;}
+        Self.TOD_Transaction2(move(account),move(sender),move(reward));
+        solution = move(metadata);
+        lock = true;
+        return true;     
+    }
+    if (copy(lock)) {return false;}
+    Self.TOD_Transaction1(move(account),move(sender),move(reward));
+    return true;
+    }
+}
