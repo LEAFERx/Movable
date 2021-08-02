@@ -38,7 +38,7 @@ pub struct Engine<'a> {
 impl<'a> Engine<'a> {
   pub fn from_genesis() -> Self {
     let mut data_store = FakeDataStore::default();
-    data_store.add_write_set(GENESIS_CHANGE_SET.clone().write_set());
+    data_store.add_write_set(GENESIS_CHANGE_SET.clone().write_set()); ;// see whether the TOD is inside here. False negatives 
     Engine {
       data_store,
       plugin_manager: PluginManager::new(),

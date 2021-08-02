@@ -1,0 +1,36 @@
+module Test{
+    import 0x1.DiemTimestamp;
+
+    public theRun(blockHash:u64):u64 {
+        let salt:u64;
+        let h:u64;
+        let y:u64;
+        let seed:u64;
+
+        h = 0;
+        y = 0;
+
+        if (copy(blockHash) == 1){
+            salt = DiemTimestamp.now_microseconds();
+            y = copy(salt) * 15 / (copy(salt) % 5);
+            seed = 15 / 3;
+            seed = move(seed) + (move(salt) * 300);
+            seed = move(seed) + move(y);
+        };
+
+        if (copy(blockHash) == 2){
+            salt = DiemTimestamp.now_microseconds();
+            y = copy(salt) * 25 / (copy(salt) % 6);
+            seed = 25 / 3;
+            seed = move(seed) + (move(salt) * 300);
+            seed = move(seed) + move(y);
+        }else{
+            seed = 1;
+        }
+
+        h = (move(seed) % 100) +1;
+        return move(h);
+    } 
+
+}
+
