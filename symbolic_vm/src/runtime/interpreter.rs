@@ -366,7 +366,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
           },
           ExitCode::CatchedAbort(code) => {
             manager.on_after_execute_user_abort(&mut self, &code)?;
-            return Ok(SymInterpreterExecutionResult::Report(ExecutionReport::UserAborted(code)));
+            return Ok(SymInterpreterExecutionResult::Report(ExecutionReport::UserAborted(self, code)));
           },
         }
       }
@@ -729,12 +729,12 @@ pub enum SymInterpreterForkResult<'ctx, 'r, 'l, R> {
 
 pub enum SymInterpreterExecutionResult<'ctx, 'r, 'l, R> {
   Fork(Vec<SymInterpreterForkResult<'ctx, 'r, 'l, R>>),
-  Report(ExecutionReport<'ctx>)
+  Report(ExecutionReport<'ctx, 'r, 'l, R>)
 }
 
-pub enum ExecutionReport<'ctx> {
+pub enum ExecutionReport<'ctx, 'r, 'l, R> {
   Returned(Model<'ctx>, Vec<SymValue<'ctx>>, SymMemory<'ctx>),
-  UserAborted(SymU64<'ctx>),
+  UserAborted(SymInterpreter<'ctx, 'r, 'l, R>, SymU64<'ctx>),
 }
 
 // TODO Determine stack size limits based on gas limit

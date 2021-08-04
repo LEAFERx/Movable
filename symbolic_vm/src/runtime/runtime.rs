@@ -234,7 +234,8 @@ impl<'ctx> VMRuntime<'ctx> {
                 println!("-------REPORT END---------");
                 println!();
               },
-              ExecutionReport::UserAborted(code) => {
+              ExecutionReport::UserAborted(mut interp, code) => {
+                plugin_manager.on_after_execute_user_abort(&mut interp, &code)?;
                 println!("-------REPORT BEGIN-------");
                 println!("Function aborted by user.");
                 println!("Code: {:?}", code);

@@ -35,7 +35,7 @@ pub struct SymMemory<'ctx> {
 impl<'ctx> SymMemory<'ctx> {
   pub fn new(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>) -> Self {
     Self {
-      ast: Array::new_const(z3_ctx, "SymMemory", &ty_ctx.memory_key_sort().sort, &ty_ctx.global_value_sort().sort),
+      ast: Array::fresh_const(z3_ctx, "SymMemory", &ty_ctx.memory_key_sort().sort, &ty_ctx.global_value_sort().sort),
     }
   }
 
@@ -47,11 +47,11 @@ impl<'ctx> SymMemory<'ctx> {
     self.ast.simplify()
   }
 
-  fn get_raw(&self, key: &Datatype<'ctx>) -> Datatype<'ctx> {
+  pub fn get_raw(&self, key: &Datatype<'ctx>) -> Datatype<'ctx> {
     self.ast.select(key).as_datatype().unwrap()
   }
 
-  fn set_raw(&mut self, key: &Datatype<'ctx>, val: Datatype<'ctx>) {
+  pub fn set_raw(&mut self, key: &Datatype<'ctx>, val: Datatype<'ctx>) {
     self.ast = self.ast.store(key, &val);
   }
 

@@ -1,5 +1,6 @@
 use move_core_types::{
   identifier::Identifier,
+  language_storage::TypeTag,
 };
 
 use vm::{
@@ -15,7 +16,7 @@ use crate::{
   },
   types::{
     memory::SymMemory,
-    values::{SymBool, SymValue, SymbolicMoveValue, SymU64},
+    values::{SymBool, SymValue, SymbolicMoveValue, SymU64, SymAccountAddress},
   },
 };
 
@@ -28,7 +29,7 @@ use std::{
 };
 
 use z3::{
-  ast::{Ast, Bool, Dynamic, exists_const},
+  ast::{Ast, Bool, Datatype, Dynamic, exists_const, forall_const},
   Context,
   Goal,
   Solver,
@@ -64,15 +65,15 @@ impl<'a> Plugin for VerificationPlugin<'a> {
   ) -> PartialVMResult<bool> {
     match self.specs.get(&Identifier::new(func.name()).unwrap())  {
       Some(spec) => {
+        println!("Opaque call for function {:?}", func.name());
         let arg_count = func.arg_count();
         let args = plugin_ctx.operand_stack_mut().popn(arg_count.try_into().unwrap())?;
         let z3_ctx = plugin_ctx.z3_ctx();
         let ty_ctx = plugin_ctx.ty_ctx();
-        let old_memory = plugin_ctx.old_memory();
         let memory = plugin_ctx.memory();
         let solver = plugin_ctx.solver();
         solver.push();
-        solver.assert(&spec.requires(z3_ctx, ty_ctx, args.as_slice(), old_memory, memory).as_inner().not());
+        solver.assert(&spec.requires(z3_ctx, ty_ctx, args.as_slice(), memory).as_inner().not());
         if solver.check() == SatResult::Sat {
           println!("precondition may not be satisfied! should abort now!");
         }
@@ -92,15 +93,31 @@ impl<'a> Plugin for VerificationPlugin<'a> {
           };
           returns.push(val);
         }
-        let no_abort = spec.aborts_if(z3_ctx, ty_ctx, args.as_slice(), old_memory, memory).as_inner().not();
-        let post_cond = spec.ensures(z3_ctx, ty_ctx, args.as_slice(), returns.as_slice(), old_memory, memory);
-        let opaque_cond = Bool::and(z3_ctx, &[&no_abort, post_cond.as_inner()]);
+        let new_memory = SymMemory::new(z3_ctx, ty_ctx);
+        let no_abort = spec.aborts_if(z3_ctx, ty_ctx, args.as_slice(), memory).as_inner().not();
+        let post_cond = spec.ensures(z3_ctx, ty_ctx, args.as_slice(), returns.as_slice(), memory, &new_memory);
+        let modifies = spec.modifies(z3_ctx, ty_ctx, args.as_slice(), memory);
+        let modifies_cond = modifies_condition(
+          z3_ctx,
+          ty_ctx,
+          modifies,
+          memory,
+          &new_memory,
+        );
+        let opaque_cond = Bool::and(z3_ctx, &[&no_abort, post_cond.as_inner(), &modifies_cond]);
         solver.assert(&opaque_cond);
+        println!("{:?}", solver);
         // TODO: consider if at here solver is unsat
+        if SatResult::Unsat == solver.check() {
+          println!("{:?}", solver);
+          panic!("After asserting the opaque post condition, the path condition becomes Unsat!");
+        }
+        println!("Opaque cond asserted");
         plugin_ctx.spec_conditions_mut().push((args, SymBool::from_ast(opaque_cond)));
         for val in returns {
           plugin_ctx.operand_stack_mut().push(val)?;
         }
+        *plugin_ctx.memory_mut() = new_memory;
         Ok(true)
       }
       None => Ok(false)
@@ -122,12 +139,31 @@ impl<'a> Plugin for VerificationPlugin<'a> {
     let solver = plugin_ctx.solver();
 
     solver.push();
-    solver.assert(self.target.aborts_if(z3_ctx, ty_ctx, args, old_memory, memory).as_inner());
+    solver.assert(self.target.aborts_if(z3_ctx, ty_ctx, args, old_memory).as_inner());
     if solver.check() == SatResult::Sat {
       solver.pop(1);
       println!("-------VERIFICATION BEGIN-------");
       println!(">>> FAILURE");
-      println!("Aborts if condition met in this path! This path should NOT abort!");
+      println!("Aborts if condition may meet in this path! This path should NOT abort!");
+      println!("-------VERIFICATION END---------");
+      return Ok(());
+    }
+    solver.pop(1);
+
+    solver.push();
+    let modifies_cond = modifies_condition(
+      z3_ctx,
+      ty_ctx,
+      self.target.modifies(z3_ctx, ty_ctx, args, old_memory),
+      old_memory,
+      memory,
+    );
+    solver.assert(&modifies_cond.not());
+    if solver.check() == SatResult::Sat {
+      solver.pop(1);
+      println!("-------VERIFICATION BEGIN-------");
+      println!(">>> FAILURE");
+      println!("Modifies may not meet in this path!");
       println!("-------VERIFICATION END---------");
       return Ok(());
     }
@@ -192,11 +228,10 @@ impl<'a> Plugin for VerificationPlugin<'a> {
     let ty_ctx = plugin_ctx.ty_ctx();
     let args = plugin_ctx.args();
     let old_memory = plugin_ctx.old_memory();
-    let memory = plugin_ctx.memory();
     let solver = plugin_ctx.solver();
 
     solver.push();
-    solver.assert(&self.target.aborts_if(z3_ctx, ty_ctx, args, old_memory, memory).as_inner().not());
+    solver.assert(&self.target.aborts_if(z3_ctx, ty_ctx, args, old_memory).as_inner().not());
     if solver.check() == SatResult::Unsat {
       solver.pop(1);
       println!("-------VERIFICATION BEGIN-------");
@@ -222,11 +257,10 @@ impl<'a> Plugin for VerificationPlugin<'a> {
     let ty_ctx = plugin_ctx.ty_ctx();
     let args = plugin_ctx.args();
     let old_memory = plugin_ctx.old_memory();
-    let memory = plugin_ctx.memory();
     let solver = plugin_ctx.solver();
 
     solver.push();
-    solver.assert(&self.target.aborts_if(z3_ctx, ty_ctx, args, old_memory, memory).as_inner().not());
+    solver.assert(&self.target.aborts_if(z3_ctx, ty_ctx, args, old_memory).as_inner().not());
     if solver.check() == SatResult::Unsat {
       solver.pop(1);
       println!("-------VERIFICATION BEGIN-------");
@@ -277,13 +311,39 @@ fn collect_variables<'ctx>(var: &impl Ast<'ctx>) -> HashSet<Dynamic<'ctx>> {
   return result;
 }
 
-fn project<'ctx>(ctx: &'ctx Context, cond: &Bool<'ctx>, vars: &HashSet<Dynamic<'ctx>>) -> Option<Bool<'ctx>> {
-  let tactic = Tactic::new(ctx, "qe"); //.and_then(&Tactic::new(ctx, "simplify"));
-  let goal = Goal::new(ctx, false, false, false);
+fn project<'ctx>(z3_ctx: &'ctx Context, cond: &Bool<'ctx>, vars: &HashSet<Dynamic<'ctx>>) -> Option<Bool<'ctx>> {
+  let tactic = Tactic::new(z3_ctx, "qe"); //.and_then(&Tactic::new(ctx, "simplify"));
+  let goal = Goal::new(z3_ctx, false, false, false);
   let bounds = collect_variables(cond);
   let bounds = bounds.difference(vars).map(|v| v as &dyn Ast<'ctx>).collect::<Vec<_>>();
-  goal.assert(&exists_const(ctx, &bounds, &[], cond));
+  goal.assert(&exists_const(z3_ctx, &bounds, &[], cond));
   let result = tactic.apply(&goal, None)
     .list_subgoals().collect::<Vec<Goal>>();
-  result.first().map(|g| Bool::and(ctx, &g.get_formulas::<Bool<'ctx>>().iter().collect::<Vec<_>>()))
+  result.first().map(|g| Bool::and(z3_ctx, &g.get_formulas::<Bool<'ctx>>().iter().collect::<Vec<_>>()))
+}
+
+fn modifies_condition<'ctx>(
+  z3_ctx: &'ctx Context,
+  ty_ctx: &TypeContext<'ctx>,
+  modifies: Vec<(SymAccountAddress<'ctx>, TypeTag)>,
+  old_memory: &SymMemory<'ctx>,
+  memory: &SymMemory<'ctx>,
+) -> Bool<'ctx> {
+  let mem_key_sort = ty_ctx.memory_key_sort();
+  let key = Datatype::fresh_const(z3_ctx, "ModifiesConditionKey", &mem_key_sort.sort);
+  let not_equal_modified_keys: Vec<_> = modifies.into_iter().map(
+    |(addr, ty)| ty_ctx.make_memory_key(addr, ty)._eq(&key).not()
+  ).collect();
+  let not_equal_modified_keys_ref: Vec<_> = not_equal_modified_keys.iter().collect();
+  let key_not_equal = Bool::and(z3_ctx, &not_equal_modified_keys_ref);
+  let old_memory_val = old_memory.get_raw(&key);
+  let memory_val = memory.get_raw(&key);
+  let memory_equal = old_memory_val._eq(&memory_val);
+  let modifies_cond = key_not_equal.implies(&memory_equal);
+  forall_const(
+    z3_ctx,
+    &[&key],
+    &[],
+    &modifies_cond,
+  )
 }

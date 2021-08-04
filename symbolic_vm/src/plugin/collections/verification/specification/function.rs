@@ -1,5 +1,6 @@
 use move_core_types::{
   identifier::Identifier,
+  language_storage::{TypeTag, StructTag},
 };
 
 use vm::{
@@ -15,7 +16,9 @@ use crate::{
   },
   types::{
     memory::SymMemory,
-    values::{SymBool, SymValue, SymbolicMoveValue, SymU64},
+    values::{
+      SymBool, SymValue, SymbolicMoveValue, SymU64, SymAccountAddress,
+    },
   },
 };
 
@@ -43,13 +46,13 @@ pub struct FunctionSpec<'a> {
   requires: FunctionRequiresSpec<'a>,
   ensures: FunctionEnsuresSpec<'a>,
   aborts_if: FunctionAbortsIfSpec<'a>,
+  modifies: FunctionModifiesSpec<'a>,
 }
 
 pub type FunctionRequiresCondition<'a> = dyn for<'ctx> Fn(
   &'ctx Context,
   &TypeContext<'ctx>,
   &[SymValue<'ctx>],        // Args
-  &SymMemory<'ctx>,         // Old Memory
   &SymMemory<'ctx>,         // Memory
 ) -> SymBool<'ctx> + 'a;
 
@@ -74,7 +77,6 @@ pub type FunctionAbortsIfCondition<'a> = dyn for<'ctx> Fn(
   &'ctx Context,
   &TypeContext<'ctx>,
   &[SymValue<'ctx>],        // Args
-  &SymMemory<'ctx>,         // Old Memory
   &SymMemory<'ctx>,         // Memory
 ) -> SymBool<'ctx> + 'a;
 
@@ -82,16 +84,29 @@ pub struct FunctionAbortsIfSpec<'a> {
   condition: Box<FunctionAbortsIfCondition<'a>>,
 }
 
+pub type FunctionModifiesCondition<'a> = dyn for<'ctx> Fn(
+  &'ctx Context,
+  &TypeContext<'ctx>,
+  &[SymValue<'ctx>],        // Args
+  &SymMemory<'ctx>,         // Memory
+) -> Vec<(SymAccountAddress<'ctx>, TypeTag)> + 'a;
+
+pub struct FunctionModifiesSpec<'a> {
+  condition: Box<FunctionModifiesCondition<'a>>,
+}
+
 impl<'a> FunctionSpec<'a> {
   pub fn new(
     requires: FunctionRequiresSpec<'a>,
     ensures: FunctionEnsuresSpec<'a>,
     aborts_if: FunctionAbortsIfSpec<'a>,
+    modifies: FunctionModifiesSpec<'a>,
   ) -> Self {
     Self {
       requires,
       ensures,
       aborts_if,
+      modifies,
     }
   }
 
@@ -100,10 +115,9 @@ impl<'a> FunctionSpec<'a> {
     z3_ctx: &'ctx Context,
     ty_ctx: &TypeContext<'ctx>,
     args: &[SymValue<'ctx>],
-    old_memory: &SymMemory<'ctx>,
     memory: &SymMemory<'ctx>,
   ) -> SymBool<'ctx> {
-    (self.requires.condition)(z3_ctx, ty_ctx, args, old_memory, memory)
+    (self.requires.condition)(z3_ctx, ty_ctx, args, memory)
   }
 
   pub fn ensures<'ctx>(
@@ -118,15 +132,24 @@ impl<'a> FunctionSpec<'a> {
     (self.ensures.condition)(z3_ctx, ty_ctx, args, return_values, old_memory, memory)
   }
 
+  pub fn modifies<'ctx>(
+    &self,
+    z3_ctx: &'ctx Context,
+    ty_ctx: &TypeContext<'ctx>,
+    args: &[SymValue<'ctx>],
+    memory: &SymMemory<'ctx>,
+  ) -> Vec<(SymAccountAddress<'ctx>, TypeTag)> {
+    (self.modifies.condition)(z3_ctx, ty_ctx, args, memory)
+  }
+
   pub fn aborts_if<'ctx>(
     &self,
     z3_ctx: &'ctx Context,
     ty_ctx: &TypeContext<'ctx>,
     args: &[SymValue<'ctx>],
-    old_memory: &SymMemory<'ctx>,
     memory: &SymMemory<'ctx>,
   ) -> SymBool<'ctx> {
-    (self.aborts_if.condition)(z3_ctx, ty_ctx, args, old_memory, memory)
+    (self.aborts_if.condition)(z3_ctx, ty_ctx, args, memory)
   }
 }
 
@@ -135,7 +158,6 @@ impl<'a> FunctionRequiresSpec<'a> {
     &'ctx Context,
     &TypeContext<'ctx>,
     &[SymValue<'ctx>],        // Args
-    &SymMemory<'ctx>,         // Old Memory
     &SymMemory<'ctx>,         // Memory
   ) -> SymBool<'ctx> + 'a) -> Self {
     Self { condition: Box::new(f) }
@@ -160,9 +182,19 @@ impl<'a> FunctionAbortsIfSpec<'a> {
     &'ctx Context,
     &TypeContext<'ctx>,
     &[SymValue<'ctx>],        // Args
-    &SymMemory<'ctx>,         // Old Memory
     &SymMemory<'ctx>,         // Memory
   ) -> SymBool<'ctx> + 'a) -> Self {
+    Self { condition: Box::new(f) }
+  }
+}
+
+impl<'a> FunctionModifiesSpec<'a> {
+  pub fn new(f: impl for<'ctx> Fn(
+    &'ctx Context,
+    &TypeContext<'ctx>,
+    &[SymValue<'ctx>],        // Args
+    &SymMemory<'ctx>,         // Memory
+  ) -> Vec<(SymAccountAddress<'ctx>, TypeTag)> + 'a) -> Self {
     Self { condition: Box::new(f) }
   }
 }
@@ -173,7 +205,6 @@ where
     &'ctx Context,
     &TypeContext<'ctx>,
     &[SymValue<'ctx>],        // Args
-    &SymMemory<'ctx>,         // Old Memory
     &SymMemory<'ctx>,         // Memory
   ) -> SymBool<'ctx> + 'a
 {
@@ -204,9 +235,22 @@ where
     &'ctx Context,
     &TypeContext<'ctx>,
     &[SymValue<'ctx>],        // Args
-    &SymMemory<'ctx>,         // Old Memory
     &SymMemory<'ctx>,         // Memory
   ) -> SymBool<'ctx> + 'a
+{
+  fn from(f: F) -> Self {
+    Self { condition: Box::new(f) }
+  }
+}
+
+impl<'a, F> From<F> for FunctionModifiesSpec<'a>
+where
+  F: for<'ctx> Fn(
+    &'ctx Context,
+    &TypeContext<'ctx>,
+    &[SymValue<'ctx>],        // Args
+    &SymMemory<'ctx>,         // Memory
+  ) -> Vec<(SymAccountAddress<'ctx>, TypeTag)> + 'a
 {
   fn from(f: F) -> Self {
     Self { condition: Box::new(f) }
@@ -216,7 +260,7 @@ where
 impl<'a> Default for FunctionRequiresSpec<'a> {
   fn default() -> Self {
     Self {
-      condition: Box::new(|z3_ctx: &Context, _ty_ctx: &TypeContext, _a: &[SymValue], _om: &SymMemory, _m: &SymMemory| SymBool::from(z3_ctx, true)),
+      condition: Box::new(|z3_ctx: &Context, _ty_ctx: &TypeContext, _a: &[SymValue], _m: &SymMemory| SymBool::from(z3_ctx, true)),
     }
   }
 }
@@ -232,7 +276,15 @@ impl<'a> Default for FunctionEnsuresSpec<'a> {
 impl<'a> Default for FunctionAbortsIfSpec<'a> {
   fn default() -> Self {
     FunctionAbortsIfSpec {
-      condition: Box::new(|z3_ctx: &Context, _ty_ctx: &TypeContext, _a: &[SymValue], _om: &SymMemory, _m: &SymMemory| SymBool::from(z3_ctx, false)),
+      condition: Box::new(|z3_ctx: &Context, _ty_ctx: &TypeContext, _a: &[SymValue], _m: &SymMemory| SymBool::from(z3_ctx, false)),
+    }
+  }
+}
+
+impl<'a> Default for FunctionModifiesSpec<'a> {
+  fn default() -> Self {
+    FunctionModifiesSpec {
+      condition: Box::new(|_z3_ctx: &Context, _ty_ctx: &TypeContext, _a: &[SymValue], _m: &SymMemory| Vec::new()),
     }
   }
 }

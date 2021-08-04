@@ -10,6 +10,15 @@ use std::{
   rc::Rc,
 };
 
+use crate::{
+  types::{
+    values::{
+      types::SymTypeTag,
+      SymAccountAddress,
+    },
+  },
+};
+
 use z3::{
   ast::{Ast, Bool, BV, Datatype, Dynamic},
   Context as Z3Context,
@@ -133,6 +142,19 @@ impl<'ctx> TypeContext<'ctx> {
 
   pub fn memory_sort(&self) -> Rc<Sort<'ctx>> {
     Rc::clone(&self.memory_sort)
+  }
+
+  pub fn make_memory_key(
+    &self,
+    addr: SymAccountAddress<'ctx>,
+    ty: TypeTag,
+  ) -> Datatype<'ctx> {
+    let tag = SymTypeTag::from_type_tag(self.z3_ctx, self, &ty).to_ast();
+    let addr = addr.as_inner();
+    self.memory_key_sort.variants[0].constructor.apply(&[
+      addr,
+      &tag,
+    ]).as_datatype().unwrap()
   }
 
   // pub fn struct_tag_to_datatype_sort(&self, ty: StructTag) -> Rc<DatatypeSort<'ctx>> {

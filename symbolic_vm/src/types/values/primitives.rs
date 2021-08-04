@@ -243,13 +243,13 @@ impl<'ctx> SymU64<'ctx> {
 
   pub fn shl(&self, n_bits: &SymU8<'ctx>) -> SymU64<'ctx> {
     SymU64 {
-      ast: self.ast.bvshl(&n_bits.ast),
+      ast: self.ast.bvshl(&n_bits.ast.zero_ext(64 - 8)),
     }
   }
 
   pub fn shr(&self, n_bits: &SymU8<'ctx>) -> SymU64<'ctx> {
     SymU64 {
-      ast: self.ast.bvlshr(&n_bits.ast),
+      ast: self.ast.bvlshr(&n_bits.ast.zero_ext(64 - 8)),
     }
   }
 
@@ -366,13 +366,13 @@ impl<'ctx> SymU128<'ctx> {
 
   pub fn shl(&self, n_bits: &SymU8<'ctx>) -> SymU128<'ctx> {
     SymU128 {
-      ast: self.ast.bvshl(&n_bits.ast),
+      ast: self.ast.bvshl(&n_bits.ast.zero_ext(128 - 8)),
     }
   }
 
   pub fn shr(&self, n_bits: &SymU8<'ctx>) -> SymU128<'ctx> {
     SymU128 {
-      ast: self.ast.bvlshr(&n_bits.ast),
+      ast: self.ast.bvlshr(&n_bits.ast.zero_ext(128 - 8)),
     }
   }
 
