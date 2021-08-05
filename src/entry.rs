@@ -10,6 +10,6 @@ use symbolic_vm::{
   runtime::SymVMRuntime,
 };
 
-fn main() {
+fn main<'txn>() {
   TransactionExecutionContext::new(gas_left: GasUnits<GasCarrier>, data_cache: &'txn dyn RemoteCache)
 }

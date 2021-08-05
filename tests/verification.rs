@@ -27,14 +27,14 @@ fn read_bytecode<P: AsRef<Path>>(bytecode_path: P) -> Vec<u8> {
   fs::read(bytecode_path).expect("Failed to open bytecode file")
 }
 
-fn exec<'a, 'ctx>(path: &str, func: &str, z3_ctx: &'ctx Context, p: VerificationPlugin<'a>) {
+fn exec<'a, 'ctx>(path: &str, func: &str, z3_ctx: &'ctx Context, p: impl Plugin + 'a) {
   env_logger::init();
 
   let path = Path::new(path);
   let function_name = IdentStr::new(func).unwrap();
   let blob = read_bytecode(path);
   let module = CompiledModule::deserialize(blob.as_slice())
-    .expect("Failed to deserialize bytecode. File may be corrupted.");
+      .expect("Failed to deserialize bytecode. File may be corrupted.");
 
   let mut engine = Engine::from_genesis();
   engine.add_module(&module.self_id(), blob);
@@ -104,10 +104,10 @@ fn abs() {
 
 fn signer_addr<'ctx>(ty_ctx: &TypeContext<'ctx>, signer: SymValue<'ctx>) -> SymAccountAddress<'ctx> {
   signer.value_as::<SymStructRef>().unwrap()
-    .borrow_field(ty_ctx, 0).unwrap()
-    .value_as::<SymReference>().unwrap()
-    .read_ref(ty_ctx).unwrap()
-    .value_as::<SymAccountAddress>().unwrap()
+      .borrow_field(ty_ctx, 0).unwrap()
+      .value_as::<SymReference>().unwrap()
+      .read_ref(ty_ctx).unwrap()
+      .value_as::<SymAccountAddress>().unwrap()
 }
 
 fn make_struct_type(address: &str, module: &str, name: &str, type_params: Vec<TypeTag>) -> TypeTag {
@@ -146,11 +146,11 @@ fn bar2_ensures<'ctx>(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, a: &[Sy
   let res = m.load_resource(z3_ctx, ty_ctx, addr, ty).unwrap();
 
   let some = res.some.1.borrow_global().unwrap()
-    .value_as::<SymStructRef>().unwrap()
-    .borrow_field(ty_ctx, 0).unwrap()
-    .value_as::<SymReference>().unwrap()
-    .read_ref(ty_ctx).unwrap()
-    .value_as::<SymU64>().unwrap();
+      .value_as::<SymStructRef>().unwrap()
+      .borrow_field(ty_ctx, 0).unwrap()
+      .value_as::<SymReference>().unwrap()
+      .read_ref(ty_ctx).unwrap()
+      .value_as::<SymU64>().unwrap();
   let cond = Bool::and(z3_ctx, &[&res.some.0, &some.as_inner()._eq(&BV::from_u64(z3_ctx, 3, 64))]);
 
   SymBool::from_ast(cond)
@@ -190,11 +190,11 @@ fn bar_ensures<'ctx>(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, a: &[Sym
   let account_u_res = m.load_resource(z3_ctx, ty_ctx, account, ty).unwrap();
 
   let account_u_g = account_u_res.some.1.borrow_global().unwrap()
-    .value_as::<SymStructRef>().unwrap()
-    .borrow_field(ty_ctx, 0).unwrap()
-    .value_as::<SymReference>().unwrap()
-    .read_ref(ty_ctx).unwrap()
-    .value_as::<SymU64>().unwrap();
+      .value_as::<SymStructRef>().unwrap()
+      .borrow_field(ty_ctx, 0).unwrap()
+      .value_as::<SymReference>().unwrap()
+      .read_ref(ty_ctx).unwrap()
+      .value_as::<SymU64>().unwrap();
   let cond = Bool::and(z3_ctx, &[
     &account_u_res.some.0,
     &Bool::or(z3_ctx, &[
@@ -214,22 +214,22 @@ fn bar_aborts_if<'ctx>(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, a: &[S
   let ty_u = make_struct_type("0x123", "M", "U", vec![TypeTag::U64]);
   let ty_t = make_struct_type("0x123", "M", "T", vec![TypeTag::Address]);
   let ty_s = make_struct_type("0x123", "M", "S", vec![TypeTag::Address]);
-  
+
   let addr1_t_res = om.load_resource(z3_ctx, ty_ctx, addr1, ty_t).unwrap();
   let addr1_t = addr1_t_res.some.1.borrow_global().unwrap()
-    .value_as::<SymStructRef>().unwrap();
+      .value_as::<SymStructRef>().unwrap();
   let addr1_t_f = addr1_t.borrow_field(ty_ctx, 0).unwrap()
-    .value_as::<SymReference>().unwrap()
-    .read_ref(ty_ctx).unwrap()
-    .value_as::<SymAccountAddress>().unwrap();
-  
+      .value_as::<SymReference>().unwrap()
+      .read_ref(ty_ctx).unwrap()
+      .value_as::<SymAccountAddress>().unwrap();
+
   let addr2_s_res = om.load_resource(z3_ctx, ty_ctx, addr2, ty_s).unwrap();
   let addr2_s = addr2_s_res.some.1.borrow_global().unwrap()
-    .value_as::<SymStructRef>().unwrap();
+      .value_as::<SymStructRef>().unwrap();
   let addr2_s_h = addr2_s.borrow_field(ty_ctx, 0).unwrap()
-    .value_as::<SymReference>().unwrap()
-    .read_ref(ty_ctx).unwrap()
-    .value_as::<SymAccountAddress>().unwrap();
+      .value_as::<SymReference>().unwrap()
+      .read_ref(ty_ctx).unwrap()
+      .value_as::<SymAccountAddress>().unwrap();
 
   let cond = Bool::or(z3_ctx, &[
     &exists(z3_ctx, ty_ctx, om, account.clone(), ty_u.clone()),
@@ -246,7 +246,7 @@ fn bar_aborts_if<'ctx>(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, a: &[S
       &addr2_s_h.as_inner()._eq(account.as_inner()).not(),
     ]),
   ]);
-  
+
   SymBool::from_ast(cond)
 }
 
@@ -257,22 +257,22 @@ fn bar_modifies<'ctx>(z3_ctx: &'ctx Context, ty_ctx: &TypeContext<'ctx>, a: &[Sy
   let ty_u = make_struct_type("0x123", "M", "U", vec![TypeTag::U64]);
   let ty_t = make_struct_type("0x123", "M", "T", vec![TypeTag::Address]);
   let ty_s = make_struct_type("0x123", "M", "S", vec![TypeTag::Address]);
-  
+
   let addr1_t_res = om.load_resource(z3_ctx, ty_ctx, addr1, ty_t).unwrap();
   let addr1_t = addr1_t_res.some.1.borrow_global().unwrap()
-    .value_as::<SymStructRef>().unwrap();
+      .value_as::<SymStructRef>().unwrap();
   let addr1_t_f = addr1_t.borrow_field(ty_ctx, 0).unwrap()
-    .value_as::<SymReference>().unwrap()
-    .read_ref(ty_ctx).unwrap()
-    .value_as::<SymAccountAddress>().unwrap();
-  
+      .value_as::<SymReference>().unwrap()
+      .read_ref(ty_ctx).unwrap()
+      .value_as::<SymAccountAddress>().unwrap();
+
   let addr2_s_res = om.load_resource(z3_ctx, ty_ctx, addr2, ty_s).unwrap();
   let addr2_s = addr2_s_res.some.1.borrow_global().unwrap()
-    .value_as::<SymStructRef>().unwrap();
+      .value_as::<SymStructRef>().unwrap();
   let addr2_s_h = addr2_s.borrow_field(ty_ctx, 0).unwrap()
-    .value_as::<SymReference>().unwrap()
-    .read_ref(ty_ctx).unwrap()
-    .value_as::<SymAccountAddress>().unwrap();
+      .value_as::<SymReference>().unwrap()
+      .read_ref(ty_ctx).unwrap()
+      .value_as::<SymAccountAddress>().unwrap();
 
   vec![(account, ty_u.clone()), (addr1_t_f, ty_u.clone()), (addr2_s_h, ty_u)]
 }
@@ -339,4 +339,28 @@ fn alias_foo_opaque() {
   verification_plugin.add_spec(Identifier::new("bar").unwrap(), bar_spec);
   verification_plugin.add_spec(Identifier::new("bar2").unwrap(), bar2_spec);
   exec("testsuites/aliasing_move_modifies_address.mv", "foo", &z3_ctx, verification_plugin);
+}
+
+#[test]
+fn td1() {
+  let z3_cfg = Config::new();
+  let z3_ctx = Context::new(&z3_cfg);
+  let mut td_plugin = TDDetectionPlugin::new();
+  exec("testsuites/td1.mv", "theRun", &z3_ctx, td_plugin);
+}
+
+#[test]
+fn td() {
+  let z3_cfg = Config::new();
+  let z3_ctx = Context::new(&z3_cfg);
+  let mut td_plugin = TDDetectionPlugin::new();
+  exec("testsuites/td.mv", "theRun", &z3_ctx, td_plugin);
+}
+
+#[test]
+fn tod() {
+  let z3_cfg = Config::new();
+  let z3_ctx = Context::new(&z3_cfg);
+  let mut tod_plugin = TODDetectionPlugin::new();
+  exec("testsuites/td.mv", "theRun", &z3_ctx, tod_plugin);
 }
