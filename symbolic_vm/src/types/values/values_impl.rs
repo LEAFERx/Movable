@@ -2293,14 +2293,13 @@ impl<'ctx> SymVectorRef<'ctx> {
     // if idx >= c.len() {
     //   return Ok(NativeResult::err(cost, INDEX_OUT_OF_BOUNDS));
     // }
-    let (res, vector) = match c {
-      VecU8(r)
-      | VecU64(r)
-      | VecU128(r)
-      | VecBool(r)
-      | VecAddress(r)
-      | Vec(r) => (r.borrow_mut().pop(context.get_ty_ctx()), r.borrow()),
-      
+    let (res, element_type) = match c {
+      VecU8(r) | VecU64(r) | VecU128(r) | VecBool(r) | VecAddress(r) | Vec(r) => {
+        let mut cloned_r = r.clone();
+        let element_type = cloned_r.borrow().element_type.clone();
+        let res = cloned_r.borrow_mut().pop(context.get_ty_ctx());
+        (res,element_type)
+      }
       Locals(_) | Struct(_) => unreachable!(),
     };
 
@@ -2309,7 +2308,7 @@ impl<'ctx> SymVectorRef<'ctx> {
       vec![SymValue::from_runtime_ast_with_type(
         context.get_z3_ctx(),
         context.get_ty_ctx(),
-        res, &vector.element_type,
+        res, &element_type,
       )?],
     ))
   }

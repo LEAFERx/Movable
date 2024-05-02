@@ -14,7 +14,7 @@ use z3::{
 };
 
 use symbolic_vm::{
-  plugin::{IntegerArithmeticPlugin, Plugin, PluginManager, VerificationPlugin},
+  plugin::{IntegerArithmeticPlugin, TDDetectionPlugin, TODDetectionPlugin, Plugin, PluginManager, VerificationPlugin},
   runtime::vm::SymbolicVM,
   types::values::{SymValue, VMSymValueCast, SymU64, SymBool},
 };

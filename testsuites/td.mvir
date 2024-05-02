@@ -10,31 +10,27 @@ module Test{
     }
 
     public theRun(blockInfo: vector<u8>):u64 {
-        let lastPayout:u64;
         let salt:u64;
-        let blockHash: vector<u8>;
         let count:u64;
         let h:u64;
         let index:u8;
         let y:u64;
         let seed:u64;
 
-        lastPayout = 0;
         salt = DiemTimestamp.now_microseconds();
-        blockHash = Hash.sha2_256(copy(blockInfo));
         count = 0;
         h = 0;
         y = 0;
 
-        while(!Vector.is_empty<u8>(&blockHash) && copy(count) < 8 ){
-            index = Vector.pop_back<u8>(&mut blockHash);
+        while(!Vector.is_empty<u8>(&blockInfo) && copy(count) < 8 ){
+            index = Vector.pop_back<u8>(&mut blockInfo);
             h = move(h) + (copy(count) << move(index) );
             count = move(count) + 1;
         };
         y = copy(salt) * DiemBlock.get_current_block_height() / (copy(salt) % 5);
         seed = DiemBlock.get_current_block_height() / 3;
         seed = move(seed) + (move(salt) * 300);
-        seed = move(seed) + move(lastPayout) + move(y);
+        seed = move(seed) +  move(y);
         // Let h be the block hash of the number of seed last block, Do some hash here
         h = (move(seed) % 100) +1;
         return move(h);

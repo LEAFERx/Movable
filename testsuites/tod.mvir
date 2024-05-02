@@ -9,22 +9,10 @@ module Test{
 
 
     public TOD_Transaction1(account: signer, receiver: address, reward: u64) {
-        let with_cap: DiemAccount.WithdrawCapability;
-    
-        with_cap = DiemAccount.extract_withdraw_capability(&account);
-        DiemAccount.pay_from<XUS.XUS>(&with_cap, move(receiver), move(reward),h"",  h"");
-        DiemAccount.restore_withdraw_capability(move(with_cap));
-        
         return;
     }
 
     public TOD_Transaction2(account: signer, receiver: address, reward: u64) {
-        let with_cap: DiemAccount.WithdrawCapability;
-    
-        with_cap = DiemAccount.extract_withdraw_capability(&account);
-        DiemAccount.pay_from<XUS.XUS>(&with_cap, move(receiver), move(reward),h"",  h"");
-        DiemAccount.restore_withdraw_capability(move(with_cap));
-        
         return;
     }
 

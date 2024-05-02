@@ -345,7 +345,7 @@ fn alias_foo_opaque() {
 fn td1() {
   let z3_cfg = Config::new();
   let z3_ctx = Context::new(&z3_cfg);
-  let mut td_plugin = TDDetectionPlugin::new();
+  let td_plugin = TDDetectionPlugin::new();
   exec("testsuites/td1.mv", "theRun", &z3_ctx, td_plugin);
 }
 
@@ -353,7 +353,7 @@ fn td1() {
 fn td() {
   let z3_cfg = Config::new();
   let z3_ctx = Context::new(&z3_cfg);
-  let mut td_plugin = TDDetectionPlugin::new();
+  let td_plugin = TDDetectionPlugin::new();
   exec("testsuites/td.mv", "theRun", &z3_ctx, td_plugin);
 }
 
@@ -361,6 +361,6 @@ fn td() {
 fn tod() {
   let z3_cfg = Config::new();
   let z3_ctx = Context::new(&z3_cfg);
-  let mut tod_plugin = TODDetectionPlugin::new();
-  exec("testsuites/td.mv", "theRun", &z3_ctx, tod_plugin);
+  let tod_plugin = TODDetectionPlugin::new();
+  exec("testsuites/tod.mv", "TOD_Attack", &z3_ctx, tod_plugin);
 }
