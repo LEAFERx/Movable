@@ -58,7 +58,7 @@ impl<'a> Engine<'a> {
     let sender = AccountAddress::random();
     let session = vm.new_session(&self.data_store);
 
-    session.execute_function(&self.plugin_manager, module, function_name, vec![])
+    session.execute_function(&mut self.plugin_manager, module, function_name, vec![])
       .expect("VM should run correctly")
   }
 }

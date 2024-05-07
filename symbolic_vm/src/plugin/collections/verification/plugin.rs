@@ -58,7 +58,7 @@ impl<'a> VerificationPlugin<'a> {
 
 impl<'a> Plugin for VerificationPlugin<'a> {
   fn on_before_call<'ctx>(
-    &self,
+    &mut self,
     plugin_ctx: &mut dyn PluginContext<'ctx>,
     func: &Function,
     _ty_args: Vec<Type>,

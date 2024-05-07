@@ -178,7 +178,7 @@ impl<'ctx, 'r, 'l, R: RemoteCache> SymInterpreter<'ctx, 'r, 'l, R> {
   pub(crate) fn execute(
     mut self,
     loader: &'l Loader,
-    manager: &PluginManager<'_>,
+    manager: &mut PluginManager<'_>,
   ) -> VMResult<SymInterpreterExecutionResult<'ctx, 'r, 'l, R>> {
     if let Some(mut current_frame) = self.call_stack.pop() {
       loop {

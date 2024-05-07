@@ -163,7 +163,7 @@ impl<'ctx> VMRuntime<'ctx> {
   pub fn execute_function(
     &self,
     z3_ctx: &'ctx Context,
-    plugin_manager: &PluginManager<'_>,
+    plugin_manager: &mut PluginManager<'_>,
     // gas_schedule: &CostTable,
     module: &ModuleId,
     function_name: &IdentStr,

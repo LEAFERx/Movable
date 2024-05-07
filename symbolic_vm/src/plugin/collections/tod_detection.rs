@@ -11,11 +11,18 @@ use crate::types::memory::SymMemory;
 use vm::errors::VMError;
 use crate::types::values::SymU64;
 
-pub struct TODDetectionPlugin();
+pub struct TODDetectionPlugin {
+  tod_transaction1: bool,
+  tod_transaction2: bool,
+  
+}
 
 impl TODDetectionPlugin {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            tod_transaction1: false,
+            tod_transaction2: false
+        }
     }
 }
 
@@ -29,23 +36,54 @@ impl Plugin for TODDetectionPlugin {
       }
     
       fn on_before_call<'ctx>(
-        &self,
+        &mut self,
         _plugin_context: &mut dyn PluginContext<'ctx>,
-        _func: &Function,
+        func: &Function,
         _ty_args: Vec<Type>,
       ) -> PartialVMResult<bool> {
+        if func.name().contains("TOD_Transaction") {
+          self.tod_transaction1 = true;
+          return Ok(true);
+        }
+        if self.tod_transaction1 && func.name().contains("TOD_Transaction") {
+          self.tod_transaction2 = true;
+          return Ok(true);
+        }
         Ok(false)
-      }
-    
-      fn on_before_execute<'ctx>(&self) -> VMResult<()> {
-        Ok(())
       }
     
       fn on_after_execute<'ctx>(
         &self,
-        _plugin_context: &mut dyn PluginContext<'ctx>,
-        _return_values: &[SymValue<'ctx>],
+        plugin_ctx: &mut dyn PluginContext<'ctx>,
+        return_values: &[SymValue<'ctx>],
       ) -> VMResult<()> {
+        if self.tod_transaction1 && self.tod_transaction2 {
+          let owner_symbol = z3::ast::BV::new_const(plugin_ctx.z3_ctx(), "owner", 64);
+          let solver = plugin_ctx.solver();
+          let model = solver.get_model().unwrap();
+          let ty_ctx = plugin_ctx.ty_ctx();
+          let z3_ctx = plugin_ctx.z3_ctx();
+          let manipulation_cond =
+              owner_symbol.bvsgt(&z3::ast::BV::from_i64(&z3_ctx, 1, 64));
+
+          solver.assert(&manipulation_cond);
+          // fmt::format(&solver);
+          match solver.check() {
+              SatResult::Unsat => {
+                  let manipulation_cond1 =
+                      owner_symbol.bvsle(&z3::ast::BV::from_i64(&z3_ctx, 1, 64));
+
+                  solver.assert(&manipulation_cond1);
+                  match solver.check() {
+                      SatResult::Sat => {
+                          println!("Block Timestamp Manipulation detected!");
+                      }
+                      _ => {}
+                  }
+              }
+              _ => {}
+          }
+        }
         Ok(())
       }
     

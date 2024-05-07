@@ -34,7 +34,7 @@ pub struct Session<'ctx, 'r, 'l, R> {
 impl<'ctx, 'r, 'l, R: RemoteCache> Session<'ctx, 'r, 'l, R> {
   pub fn execute_function(
     mut self,
-    plugin_manager: &PluginManager<'_>,
+    plugin_manager: &mut PluginManager<'_>,
     module: &ModuleId,
     function_name: &IdentStr,
     ty_args: Vec<TypeTag>,

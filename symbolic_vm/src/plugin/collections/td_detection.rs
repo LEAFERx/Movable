@@ -7,32 +7,28 @@ use crate::{
     types::values::SymIntegerValue,
     types::values::SymValue,
 };
-use move_core_types::identifier::Identifier;
+use move_core_types::{identifier::Identifier, language_storage::TypeTag};
 use move_vm_types::loaded_data::runtime_types::Type;
-use vm::{
-    errors::{PartialVMResult, VMResult},
-};
+use vm::errors::{PartialVMResult, VMResult};
 use z3::{
-    ast::{exists_const, forall_const, Ast, Bool, Datatype, Dynamic},
+    ast::{exists_const, forall_const, Ast, Bool, Datatype, Dynamic, BV},
     Context, Goal, SatResult, Solver, Tactic,
 };
-pub struct TDDetectionPlugin {
+pub struct TDDetectionPlugin  {
     now_microseconds_used: bool,
-    timestamp_symbol: Option<u64>,
 }
 
 impl TDDetectionPlugin {
     pub fn new() -> Self {
         Self {
             now_microseconds_used: false,
-            timestamp_symbol: None,
         }
     }
 }
 
 impl Plugin for TDDetectionPlugin {
     fn on_before_call<'ctx>(
-        &self,
+        &mut self,
         plugin_ctx: &mut dyn PluginContext<'ctx>,
         func: &Function,
         _ty_args: Vec<Type>,
@@ -41,14 +37,8 @@ impl Plugin for TDDetectionPlugin {
             self.now_microseconds_used = true;
             let ty_ctx = plugin_ctx.ty_ctx();
             let z3_ctx = plugin_ctx.z3_ctx();
-            self.timestamp_symbol = Some(rand::random::<u64>());
-            let model = plugin_ctx.solver();
-            let mem_key_sort = ty_ctx.memory_key_sort();
-            let timestamp_val = Datatype::fresh_const(z3_ctx, "timestamp", &mem_key_sort.sort);
-            plugin_ctx
-                .memory_mut()
-                .write_resource(z3_ctx, ty_ctx, timestamp_val);
-            Ok(true)
+            // self.timestamp_symbol = Some(&z3::ast::BV::new_const(&z3_ctx, "timestamp", 64));
+            return Ok(true);
         }
         Ok(false)
     }
@@ -59,26 +49,33 @@ impl Plugin for TDDetectionPlugin {
         return_values: &[SymValue<'ctx>],
     ) -> VMResult<()> {
         if self.now_microseconds_used {
-            if let Some(timestamp_symbol) = self.timestamp_symbol {
+            // if let Some(timestamp_symbol) = self.timestamp_symbol {
+                let timestamp_symbol = z3::ast::BV::new_const(plugin_ctx.z3_ctx(), "timestamp", 64);// pretend the path condition has the variable names the same timestamp
                 let solver = plugin_ctx.solver();
                 let model = solver.get_model().unwrap();
                 let ty_ctx = plugin_ctx.ty_ctx();
                 let z3_ctx = plugin_ctx.z3_ctx();
-                let timestamp_val =
-                    plugin_ctx
-                        .memory_mut()
-                        .load_resource(z3_ctx, ty_ctx, &model, "timestamp").unwrap();
-                let bv_r = SymIntegerValue::U64();
-                let manipulation_cond = timestamp_val.gt(bv_r);
-                solver.assert(&manipulation_cond.not());
+                let manipulation_cond =
+                    timestamp_symbol.bvsgt(&z3::ast::BV::from_i64(&z3_ctx, 1, 64));
 
+                solver.assert(&manipulation_cond);
+                // fmt::format(&solver);
                 match solver.check() {
-                    SatResult::Sat => {
-                        println!("Block Timestamp Manipulation detected!");
+                    SatResult::Unsat => {
+                        let manipulation_cond1 =
+                            timestamp_symbol.bvsle(&z3::ast::BV::from_i64(&z3_ctx, 1, 64));
+
+                        solver.assert(&manipulation_cond1);
+                        match solver.check() {
+                            SatResult::Sat => {
+                                println!("Block Timestamp Manipulation detected!");
+                            }
+                            _ => {}
+                        }
                     }
                     _ => {}
                 }
-            }
+            // }
         }
         Ok(())
     }

@@ -13,10 +13,10 @@ use vm::{
 
 use move_vm_types::loaded_data::runtime_types::Type;
 
-use std::vec::Vec;
+use std::{borrow::BorrowMut, vec::Vec};
 
 pub struct PluginManager<'a> {
-  plugins: Vec<Box<dyn Plugin + 'a>>,
+  plugins: Vec< Box<dyn Plugin + 'a>>,
 }
 
 impl<'a> PluginManager<'a> {
@@ -28,7 +28,7 @@ impl<'a> PluginManager<'a> {
 
   pub fn add_plugin(&mut self, p: impl Plugin + 'a) {
     self.plugins.push(Box::new(p));
-  }
+}
 
   pub(crate) fn before_execute_instruction<'ctx>(
     &self,
@@ -42,13 +42,13 @@ impl<'a> PluginManager<'a> {
   }
 
   pub(crate) fn before_call<'ctx>(
-    &self,
+    &mut self,
     plugin_context: &mut dyn PluginContext<'ctx>,
     func: &Function,
     ty_args: Vec<Type>,
   ) -> PartialVMResult<bool>{
     let mut result = false;
-    for plugin in self.plugins.iter() {
+    for plugin in self.plugins.iter_mut() {
       result = result || plugin.on_before_call(plugin_context, func, ty_args.clone())?;
     }
     Ok(result)

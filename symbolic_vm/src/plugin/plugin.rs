@@ -50,7 +50,7 @@ pub trait Plugin {
   }
 
   fn on_before_call<'ctx>(
-    &self,
+    &mut self,
     _plugin_context: &mut dyn PluginContext<'ctx>,
     _func: &Function,
     _ty_args: Vec<Type>,
