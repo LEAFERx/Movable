@@ -188,7 +188,8 @@ impl<'a> Plugin for VerificationPlugin<'a> {
     let spec_conditions = plugin_ctx.spec_conditions();
     let pc = Bool::and(z3_ctx,
       &path_conditions.iter()
-        .chain(spec_conditions.iter().map(|(_, s)| s)).map(|v| v.as_inner())
+        .chain(spec_conditions.iter().map(|(_, s)| s))
+        .map(|v| v.as_inner())
         .collect::<Vec<_>>(),
     );
     for (spec_inputs, spec) in plugin_ctx.spec_conditions().iter() {
